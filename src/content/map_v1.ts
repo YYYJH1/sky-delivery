@@ -3,7 +3,7 @@
 import type { MapV1 } from './table_types.ts';
 
 export const MAP_V1: MapV1 = {
-  version: 4,
+  version: 5,
   mapSeed: 17,
   width: 2400,
   height: 1800,

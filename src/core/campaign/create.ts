@@ -65,6 +65,7 @@ export function createCampaignState(config: SimConfig): SimState {
       tips: [],
       delivered: 0,
       ending: null,
+      goals: null,
       away: [],
     },
   };

@@ -1,12 +1,14 @@
-// 常驻界面的部件：小票、日程纸条（右端贴便签）、速度纸条、价签、改装面板、站点小卡、系统提示、菜单。
-// 片区纸条、地图上的开通价签、结局在 note-panels.tsx，调度台在 board-panel.tsx，高峰小结和日结在 ticket-panels.tsx。
+// 常驻界面的部件：小票（高峰进行中下面跟着各片区的结果）、日程纸条、速度纸条、价签、改装面板、站点小卡、系统提示、菜单。
+// 片区纸条、便签、地图上的开通价签、结局在 note-panels.tsx，调度台在 board-panel.tsx，高峰小结和日结在 ticket-panels.tsx。
 // 部件只读 state.ts 里的界面数据和界面状态，点击交给 actions，不碰游戏状态。文字全部取自词表。
-// 界面是直角，纸白底，蓝黑细边，没有纸纹、阴影和动画。
+// 物件是纸做的：小票是点阵字加锯齿的下沿，纸条是纸白底加蓝黑细边，价签切角打孔，都配一张代码画的背景图（Sheet）。
+import { Fragment } from 'preact';
 import { STR, fmt, peakName, reasonText, stationNumeral } from '../content/strings.zh.ts';
 import { BoardPanel } from './board-panel.tsx';
 import { cardPlacement } from './map-layout.ts';
 import { DistrictNote, EndingNote, OpenTags, TipNote } from './note-panels.tsx';
 import { PEAK_BANDS, TICK_MARKS } from './schedule.ts';
+import { MarkUnderline, Sheet, TagText } from './sheets.tsx';
 import {
   actions,
   anchor,
@@ -14,10 +16,12 @@ import {
   buildMode,
   exportCode,
   importOpen,
+  mapFailed,
   menuOpen,
   roofLabels,
   run,
   selected,
+  soundOn,
   toast,
   tooltip,
   uiData,
@@ -28,14 +32,46 @@ import type { UpgradeItem } from './tags.ts';
 import { DayEndTicket, SummaryTicket } from './ticket-panels.tsx';
 import type { StationCard, UiData } from './view-model.ts';
 
-// ---- 左上：小票 ----
+// ---- 左上：小票，高峰进行中它下面是各片区的结果和这一场的目标 ----
+// 小票的文字是一句话，几段之间隔着全角空格。这里按全角空格拆成几行：标签、金额（36 像素的大字）、今日收入。
+// 全角空格仍然留在页面里（.gap，不占位置），所以整张小票的文字和原来的一句话一样。
+const SPLIT = String.fromCodePoint(0x3000);
+
 export function Ticket({ d }: { d: UiData }) {
+  const parts = fmt(STR.hud.ticket, { balance: d.balance, earned: d.earned }).split(SPLIT);
   return (
     <div class="corner tl">
-      <div class="block receipt" data-part="ticket">
-        {fmt(STR.hud.ticket, { balance: d.balance, earned: d.earned })}
-      </div>
+      <Sheet kind="slip" seed={11} depth={4} class="block slip receipt" part="ticket">
+        {parts.map((text, i) => (
+          <Fragment key={i}>
+            {i === 0 ? null : <span class="gap">{SPLIT}</span>}
+            <span class={i === 1 ? 'px-row px-big' : 'px-row'}>{text}</span>
+          </Fragment>
+        ))}
+      </Sheet>
+      <LivePanel d={d} />
     </div>
+  );
+}
+
+// 高峰进行中各片区已有的结果和这一场的目标：每个开通的片区一行，目标写在下面一行的小字里。
+// 离目标线最远的一行加粗，下面画一道手写的线。
+// 放在左上角的小票下面：那里没有地图，三个片区都开通时也不会盖住屋顶和店。高峰之外不显示。
+export function LivePanel({ d }: { d: UiData }) {
+  const live = d.live;
+  if (live === null) return null;
+  return (
+    <Sheet kind="strip" seed={12} class="block paper live" part="live">
+      {live.rows.map((r) => (
+        <div key={r.district} class={r.farthest ? 'live-row far' : 'live-row'} data-part={`live-${r.name}`}>
+          <span class="live-counts">
+            {r.counts}
+            {r.farthest ? <MarkUnderline seed={30 + r.district} /> : null}
+          </span>
+          {r.goal === null ? null : <span class="live-goal">{r.goal}</span>}
+        </div>
+      ))}
+    </Sheet>
   );
 }
 
@@ -47,7 +83,7 @@ export function Schedule({ d }: { d: UiData }) {
   const markerX = d.dayFraction * RULER_WIDTH;
   return (
     <div class="corner tc">
-      <div class="block paper schedule" data-part="schedule">
+      <Sheet kind="strip" seed={13} class="block paper schedule" part="schedule">
         <div class="clock">{fmt(STR.hud.schedule.dayTime, { day: d.day, time: d.clock })}</div>
         <svg class="ruler" width={RULER_WIDTH} height={RULER_HEIGHT} viewBox={`0 0 ${RULER_WIDTH} ${RULER_HEIGHT}`}>
           <defs>
@@ -81,8 +117,7 @@ export function Schedule({ d }: { d: UiData }) {
           <line class="now-line" x1={markerX} y1="17" x2={markerX} y2="35" />
           <polygon class="now-mark" points={`${markerX - 6},46 ${markerX + 6},46 ${markerX},35`} />
         </svg>
-      </div>
-      <TipNote d={d} />
+      </Sheet>
     </div>
   );
 }
@@ -90,31 +125,36 @@ export function Schedule({ d }: { d: UiData }) {
 // ---- 右上：速度纸条 ----
 export function SpeedStrip() {
   const { paused, speed } = run.value;
-  const item = (name: string, label: string, on: boolean, onClick: () => void) => (
+  const item = (name: string, label: string, on: boolean, onClick: () => void, seed: number) => (
     <span class={on ? 'word on' : 'word'} data-part={name} onClick={onClick}>
       {label}
+      {on ? <MarkUnderline seed={seed} /> : null}
     </span>
   );
   return (
     <div class="corner tr">
-      <div class="block paper speed" data-part="speed">
-        {item('pause', STR.hud.speed.pause, paused, () => actions.togglePause())}
-        {item('x1', STR.hud.speed.x1, !paused && speed === 1, () => actions.setSpeed(1))}
-        {item('x2', STR.hud.speed.x2, !paused && speed === 2, () => actions.setSpeed(2))}
-        {item('x3', STR.hud.speed.x3, !paused && speed === 3, () => actions.setSpeed(3))}
-        {item('menu', STR.hud.speed.menu, menuOpen.value, () => (menuOpen.value ? actions.closeMenu() : actions.openMenu()))}
-      </div>
+      <Sheet kind="strip" seed={14} class="block paper speed" part="speed">
+        {item('pause', STR.hud.speed.pause, paused, () => actions.togglePause(), 41)}
+        {item('x1', STR.hud.speed.x1, !paused && speed === 1, () => actions.setSpeed(1), 42)}
+        {item('x2', STR.hud.speed.x2, !paused && speed === 2, () => actions.setSpeed(2), 43)}
+        {item('x3', STR.hud.speed.x3, !paused && speed === 3, () => actions.setSpeed(3), 44)}
+        {item('menu', STR.hud.speed.menu, menuOpen.value, () => (menuOpen.value ? actions.closeMenu() : actions.openMenu()), 45)}
+      </Sheet>
     </div>
   );
 }
 
-// ---- 左下：价签和改装面板 ----
-function Tag(props: { part: string; text: string; dim?: boolean; on?: boolean; onClick: () => void }) {
+// ---- 左下：价签和改装面板，右边紧跟着片区纸条 ----
+// 价签的价格越买越高，四张价签合起来的宽度会变。片区纸条排在价签后面（同一行，底边对齐），价签变宽时它跟着往右让，不会被压住。
+function Tag(props: { part: string; text: string; seed: number; dim?: boolean; on?: boolean; onClick: () => void }) {
   const cls = `tag${props.dim === true ? ' dim' : ''}${props.on === true ? ' on' : ''}`;
   return (
-    <span class={cls} data-part={props.part} onClick={props.onClick}>
-      {props.text}
-    </span>
+    <Sheet kind="tag" seed={props.seed} class={cls} part={props.part} onClick={props.onClick}>
+      <span class="tag-text">
+        <TagText text={props.text} />
+        {props.on === true ? <MarkUnderline seed={props.seed} /> : null}
+      </span>
+    </Sheet>
   );
 }
 
@@ -133,6 +173,7 @@ export function PriceTags({ d }: { d: UiData }) {
       <Tag
         part="tag-build"
         text={fmt(STR.hud.price.buildStation, { price: d.build.tag.price })}
+        seed={20}
         dim={d.build.tag.dim}
         on={buildMode.value}
         onClick={() => actions.clickBuild()}
@@ -141,6 +182,7 @@ export function PriceTags({ d }: { d: UiData }) {
         <Tag
           part="tag-bay"
           text={fmt(STR.hud.price.addBay, { price: card.tags.addBay.price })}
+          seed={21}
           dim={card.tags.addBay.dim}
           onClick={() => actions.clickAddBay()}
         />
@@ -149,11 +191,12 @@ export function PriceTags({ d }: { d: UiData }) {
         <Tag
           part="tag-drone"
           text={fmt(STR.hud.price.addDrone, { price: card.tags.addDrone.price })}
+          seed={22}
           dim={card.tags.addDrone.dim}
           onClick={() => actions.clickAddDrone()}
         />
       )}
-      <Tag part="tag-upgrades" text={STR.hud.price.upgrades} on={upgradesOpen.value} onClick={() => actions.clickUpgrades()} />
+      <Tag part="tag-upgrades" text={STR.hud.price.upgrades} seed={23} on={upgradesOpen.value} onClick={() => actions.clickUpgrades()} />
     </div>
   );
 }
@@ -189,11 +232,11 @@ export function UpgradePanel({ d }: { d: UiData }) {
   const card = sel === null ? undefined : d.stations.find((s) => s.id === sel);
   const gate = card === undefined ? d.gateWithoutStation : card.gate;
   return (
-    <div class="block paper upgrades" data-part="upgrades">
+    <Sheet kind="strip" seed={15} class="block paper upgrades" part="upgrades">
       {d.doubleBoxShown ? <UpgradeRow item={d.doubleBox} /> : null}
       <UpgradeRow item={gate} />
       <UpgradeRow item={d.nearbyLanding} />
-    </div>
+    </Sheet>
   );
 }
 
@@ -206,9 +249,9 @@ export function StationCardView({ d }: { d: UiData }) {
   if (card === undefined) return null;
   const view = windowView.value;
   const place = cardPlacement(at, view.width, view.height, view.scale);
-  const style = `left:${place.left}px;top:${place.top}px;transform:scale(${view.scale})${place.flip ? ' translateX(-100%)' : ''}`;
+  const style = { left: `${place.left}px`, top: `${place.top}px`, transform: `scale(${view.scale})${place.flip ? ' translateX(-100%)' : ''}` };
   return (
-    <div class="block paper card" data-part="card" style={style}>
+    <Sheet kind="strip" seed={16} class="block paper card" part="card" style={style}>
       <div class="card-title">{fmt(STR.hud.card.title, { station: stationNumeral(card.number) })}</div>
       <div>{fmt(STR.hud.card.bays, { count: card.bays, limit: card.bayLimit })}</div>
       <div>{fmt(STR.hud.card.drones, { count: card.drones })}</div>
@@ -219,17 +262,27 @@ export function StationCardView({ d }: { d: UiData }) {
           {fmt(STR.system.refundAvailable, { refund: card.refund.amount })}
         </div>
       )}
-    </div>
+    </Sheet>
   );
 }
 
-// ---- 地图上：选屋顶时候选屋顶旁边的两行字，鼠标停在小票上的提示 ----
-// 位置由 game.ts 算好，放在窗口坐标里，不挡鼠标：点击穿过它们落到地图上。
+// ---- 地图上：选屋顶时候选屋顶旁边的几行字，鼠标停在小票上的提示 ----
+// 位置由 game.ts 算好，放在窗口坐标里，不挡鼠标：点击穿过它们落到地图上。文字离开屋顶时，一条细线连回屋顶。
 export function RoofLabels() {
   const list = roofLabels.value;
   if (list.length === 0) return null;
   return (
     <>
+      <svg class="roof-leaders" data-part="roof-leaders">
+        {list.map((label) =>
+          label.leader === null ? null : (
+            <g key={label.roof} data-part={`roof-leader-${label.roof}`}>
+              <line class="roof-leader" x1={label.leader.x1} y1={label.leader.y1} x2={label.leader.x2} y2={label.leader.y2} />
+              <circle class="roof-leader-dot" cx={label.leader.x1} cy={label.leader.y1} r="2.5" />
+            </g>
+          ),
+        )}
+      </svg>
       {list.map((label) => (
         <div
           key={label.roof}
@@ -262,9 +315,9 @@ export function Toast() {
   if (t === null) return null;
   return (
     <div class="corner bc">
-      <div class="block paper toast" data-part="toast" key={t.id}>
+      <Sheet key={t.id} kind="strip" seed={17} class="block paper toast" part="toast">
         {t.text}
-      </div>
+      </Sheet>
     </div>
   );
 }
@@ -276,7 +329,7 @@ export function Menu() {
   const importing = importOpen.value;
   return (
     <div class="menu-corner">
-      <div class="block paper menu" data-part="menu-panel">
+      <Sheet kind="strip" seed={18} class="block paper menu" part="menu-panel">
         <div class="menu-item" data-part="menu-resume" onClick={() => actions.closeMenu()}>
           {STR.hud.menu.resume}
         </div>
@@ -302,11 +355,14 @@ export function Menu() {
             }}
           />
         ) : null}
+        <div class="menu-item" data-part="menu-sound" onClick={() => actions.toggleSound()}>
+          {soundOn.value ? STR.hud.menu.soundOn : STR.hud.menu.soundOff}
+        </div>
         <div class="menu-item" data-part="menu-quit" onClick={() => actions.quit()}>
           {STR.hud.menu.quit}
         </div>
         {code === null ? null : <textarea class="export-code" data-part="export-code" readOnly value={code} onFocus={(e) => e.currentTarget.select()} />}
-      </div>
+      </Sheet>
     </div>
   );
 }
@@ -315,9 +371,20 @@ export function Menu() {
 export function BlockedNotice() {
   return (
     <div class="blocked">
-      <div class="block paper toast" data-part="blocked">
+      <Sheet kind="strip" seed={19} class="block paper toast" part="blocked">
         {STR.system.otherPage}
-      </div>
+      </Sheet>
+    </div>
+  );
+}
+
+// ---- 地图画不出来 ----
+export function MapFailedNotice() {
+  return (
+    <div class="blocked">
+      <Sheet kind="strip" seed={19} class="block paper toast" part="map-failed">
+        {STR.system.noWebGl}
+      </Sheet>
     </div>
   );
 }
@@ -333,20 +400,24 @@ export function Hud() {
       <Schedule d={d} />
       <SpeedStrip />
       <div class="corner bl">
-        <UpgradePanel d={d} />
-        <PriceTags d={d} />
+        <div class="bl-stack">
+          <UpgradePanel d={d} />
+          <PriceTags d={d} />
+        </div>
+        <DistrictNote d={d} />
       </div>
       <OpenTags d={d} />
       <RoofLabels />
       <StationCardView d={d} />
-      <DistrictNote d={d} />
       <BoardPanel d={d} />
       <SummaryTicket d={d} />
       <DayEndTicket d={d} />
+      <TipNote d={d} />
       <EndingNote d={d} />
       <OrderTooltip />
       <Toast />
       <Menu />
+      {mapFailed.value ? <MapFailedNotice /> : null}
     </>
   );
 }

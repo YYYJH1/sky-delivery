@@ -3,15 +3,15 @@
 //   ff=100             开局后先快进到第 100 秒再开始（快进时替玩家点击开局的五张订单）
 //   money=500          把余额改成 500
 //   pause=1            开局时暂停
-//   unlock=all         打开开放项：all 是全部（午晚两套规矩除外，它随开通写字楼区出现），或者写名字，用逗号隔开，如 priceTags,doubleBox
-//   open=1,2           把这几个片区开通（0 老街，1 写字楼区，2 大学城），开通写字楼区会同时分成午晚两套规矩
+//   unlock=all         打开开放项：all 是全部（午晚两套策略除外，它随开通写字楼区出现），或者写名字，用逗号隔开，如 priceTags,doubleBox
+//   open=1,2           把这几个片区开通（0 老街，1 写字楼区，2 大学城），开通写字楼区会同时分成午晚两套策略
 //   stars=3,2,1        各片区的星级，按片区编号依次写，少写的不改
 //   misses=1,0,0       各片区「连续没有达到当前星级下面一档」的日结次数，用来造出可能掉星的状态
 //   readtips=1         把快进之后已经出现的便签都标成已读，只留之后新出现的
 //   drones=80          把飞机补到 80 架，平分给各站，停机位跟着加（不受屋顶停机位上限的限制），性能测试用
-//   look=day           地图的状态：day、dusk、night、rain，缺省 day。只改画面，不改游戏，所以不算调试开局，存档位置不变
+//   look=day           地图的状态固定为 day、dusk、night 或 rain，不给时随游戏时刻变化。只改画面，不改游戏，所以不算调试开局，存档位置不变
 // 快进之后的顺序是：开通片区，星级，开放项，日结的次数，便签，飞机，余额。
-// 打开「一趟送几单」一栏（poolColumn，包括 unlock=all）时，这一栏同时从「一趟送一单」换成「顺路的一起送」，与买下双层货箱一样。
+// 打开「合单策略」一栏（poolColumn，包括 unlock=all）时，这一栏同时从「单独配送」换成「顺路合并」，与买下双层货箱一样。
 // 只要给了上面任何一个参数，就用单独的存档位置，不读也不写正常的存档。
 // 纯函数，不碰 DOM。
 import { DroneState, UNLOCK_KEYS, applyCommand, autoPoolAfterDoubleBox, isUnlocked, markTipRead, refreshShops, refreshUnlocks, step, unlock } from '../core/index.ts';
@@ -50,7 +50,7 @@ export const DEBUG_NAMESPACE = 'sky-delivery.debug.';
 
 const KNOWN = ['seed', 'ff', 'money', 'pause', 'unlock', 'open', 'stars', 'misses', 'readtips', 'drones', 'look'];
 
-/** 午晚两套规矩不能直接打开：它在开通写字楼区时才出现，分成两套的同时开放。 */
+/** 午晚两套策略不能直接打开：它在开通写字楼区时才出现，分成两套的同时开放。 */
 const ALL_UNLOCKS: readonly UnlockKey[] = UNLOCK_KEYS.filter((key) => key !== 'ruleSets');
 
 export function parseGameParams(search: string): GameParams {
@@ -141,9 +141,9 @@ export function applyDebug(state: SimState, params: GameParams): void {
   });
   refreshShops(state);
   for (const key of params.unlock) unlock(state, key);
-  refreshUnlocks(state); // 开通写字楼区时分成午晚两套规矩
-  // 经营模式的调度台里没有「一趟送一单」。直接打开「一趟送几单」一栏，等于没买双层货箱就开放了这一栏，
-  // 这时照买下双层货箱的做法，把这一栏从「一趟送一单」换成「顺路的一起送」，调度台才有选中的卡可写
+  refreshUnlocks(state); // 开通写字楼区时分成午晚两套策略
+  // 经营模式的调度台里没有「单独配送」。直接打开「合单策略」一栏，等于没买双层货箱就开放了这一栏，
+  // 这时照买下双层货箱的做法，把这一栏从「单独配送」换成「顺路合并」，调度台才有选中的卡可写
   if (isUnlocked(state, 'poolColumn')) autoPoolAfterDoubleBox(state);
   params.misses.forEach((n, k) => {
     const rating = campaign.rating[k];

@@ -278,9 +278,9 @@ export interface PeakSummary {
   districts: DistrictStats[];
   segments: Segments;
   early: {
-    count: number | null; // 提前派出的订单数。这一场中途换过「先送哪张单」时为 null
-    rules: string[]; // 记数时生效过的「先送哪张单」
-    changedMidPeak: boolean; // 这一场中途换过「先送哪张单」
+    count: number | null; // 提前派出的订单数。这一场中途换过「调度策略」时为 null
+    rules: string[]; // 记数时生效过的「调度策略」
+    changedMidPeak: boolean; // 这一场中途换过「调度策略」
   };
   stations: StationStats[];
   nonNearestRate: number;

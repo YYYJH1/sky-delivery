@@ -154,9 +154,9 @@ describe('提示里的时间', () => {
     expect(formatSavedAt(new Date(2027, 0, 5, 7, 4).getTime())).toBe('2027-01-05 07:04');
   });
 
-  it('填进词表的「存档读不出来，已换成 {时间} 的备份。」', () => {
+  it('填进词表的「存档已损坏，已恢复为 {时间} 的备份。」', () => {
     const text = fmt(STR.system.saveCorrupt, { savedAt: formatSavedAt(new Date(2026, 10, 12, 21, 30).getTime()) });
-    expect(text).toBe('存档读不出来，已换成 2026-11-12 21:30 的备份。');
+    expect(text).toBe(fmt(STR.system.saveCorrupt, { savedAt: '2026-11-12 21:30' }));
   });
 });
 
@@ -209,7 +209,7 @@ describe('同一个浏览器开两个页面：运行权', () => {
   });
 
   it('提示文字取自词表', () => {
-    expect(STR.system.otherPage).toBe('已在别的页面打开。');
+    expect(STR.system.otherPage).toBe('游戏已在其他页面打开。');
   });
 });
 
@@ -235,7 +235,7 @@ describe('调试参数', () => {
     expect(p.errors).toHaveLength(4);
   });
 
-  it('unlock 参数：all 是全部开放项（午晚两套规矩除外），也可以逐个写名字；写错的名字整个参数不生效', () => {
+  it('unlock 参数：all 是全部开放项（午晚两套策略除外），也可以逐个写名字；写错的名字整个参数不生效', () => {
     const all = parseGameParams('?unlock=all');
     expect(all.unlock).toContain('priceTags');
     expect(all.unlock).toContain('showCampus');

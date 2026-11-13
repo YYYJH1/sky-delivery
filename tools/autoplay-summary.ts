@@ -1,9 +1,36 @@
 // 自动购买脚本的汇总：每个节点在各玩法下的分位数和达到比例，第一天升二星的比例，写字楼区的过河单比例，
-// 攒钱时间，三种固定玩法能不能在目标时间内做到两个片区三星，均衡玩法的逐天数字。
+// 攒钱时间，固定玩法能不能在目标时间内做到两个片区三星，结局的时间和到达比例，各片区在两场高峰里的订单占比，
+// 均衡玩法的逐天数字，以及按校准目标逐条核对的结果。
 // 全部是纯函数，输入是一批 RunRecord，输出是汇总对象和 Markdown 文本。
+import { STARS_V1 } from '../src/content/stars_v1.ts';
 import { DAY_STEPS } from '../src/core/index.ts';
 import { MAIN_NODES, NODE_INFO, POLICIES, POLICY_IDS, stepsToMinutes } from './autoplay-lib.ts';
 import type { NodeId, PolicyId, PurchaseRecord, RunRecord } from './autoplay-lib.ts';
+
+// ---- 校准目标 ----
+
+/** 校准目标里的数字，核对表（goalChecks）按它们判断。时间都是一倍速的游戏内分钟。 */
+export const GOALS = {
+  /** 均衡玩法结局的时间区间，中位数要落在里面，四分位尽量也在里面 */
+  endingMinutes: [120, 180],
+  /** 均衡玩法在这个时间之前到达结局的比例，不低于 endingShare */
+  endingWithin: 240,
+  endingShare: 0.9,
+  /** 四种不需要判断的玩法在这个时间之前到达结局的比例，不超过 weakShare */
+  weakWithin: 180,
+  weakShare: 0.2,
+  /** 任何一次购买的攒钱时间不超过这么多个游戏日 */
+  savingDays: 2,
+  /** 均衡玩法第一天升到二星的局占的比例，不低于这个数 */
+  dayOneStar2: 0.8,
+  /** 四星的准时率线（百分数）不超过这个数 */
+  fourStarLine: 90,
+  /** 大学城开通之后，午高峰的订单里写字楼区占的比例不低于这个数，晚高峰的订单里老街和大学城合起来占的比例也不低于这个数 */
+  peakLead: 0.5,
+} as const;
+
+/** 四种不需要判断的玩法：只扩建一座站，全程不换卡，只买飞机，不操作。 */
+export const WEAK_POLICIES: readonly PolicyId[] = ['singleStation', 'noCards', 'dronesOnly', 'idle'];
 
 // ---- 分位数 ----
 
@@ -90,11 +117,49 @@ export interface FixedStat {
   finalOfficeStars: Record<string, number>;
 }
 
+/** 一个玩法在局内到达结局的时间和比例。 */
+export interface EndingStat {
+  runs: number;
+  reached: number; // 局内到达结局的局数
+  p25: number | null; // 分钟
+  p50: number | null;
+  p75: number | null;
+  /** 在 120、150、180、240 分钟之前到达结局的局占的比例 */
+  within120: number;
+  within150: number;
+  within180: number;
+  within240: number;
+}
+
+/** 一个时期里各片区在两场高峰的订单占比。 */
+export interface ShareRow {
+  runs: number; // 有这个时期的局数
+  days: number; // 全部局的这个时期的天数合计
+  noon: number[]; // 全部种子合并的午高峰订单数，下标是片区
+  evening: number[];
+  /** 每个（局、天）里，午高峰订单最多的那个片区占的比例：中位数和上四分位 */
+  topNoon: { p50: number | null; p75: number | null };
+  topEvening: { p50: number | null; p75: number | null };
+}
+
+/**
+ * 三个时期，每个时期都从一件事发生之后的第一个整天算起：
+ * twoDistricts 写字楼区开通之后，到大学城开通之前（没有开通大学城的局算到局末）。
+ * campus 大学城开通之后，到结局那一天为止（没有到结局的局算到局末）。
+ * after 结局之后到局末。
+ */
+export interface ShareStat {
+  twoDistricts: ShareRow;
+  campus: ShareRow;
+  after: ShareRow;
+}
+
 export interface DailyStat {
   day: number;
   balance: number | null; // 中位数
   income: number | null;
   spent: number | null;
+  stations: number | null;
   drones: number | null;
   stars: number[]; // 各片区星级的中位数，没开通的片区为 0
   onTimePct: (number | null)[]; // 各片区最近两天准时率的中位数
@@ -113,7 +178,16 @@ export interface PolicySummary {
   saving: SavingStat;
   purchaseTypes: PurchaseTypeStat[];
   fixed: FixedStat;
+  ending: EndingStat;
+  shares: ShareStat;
   daily: DailyStat[];
+}
+
+/** 核对表的一行：目标，数值，是否达到。 */
+export interface GoalCheck {
+  goal: string;
+  value: string;
+  pass: boolean;
 }
 
 export interface Summary {
@@ -242,6 +316,76 @@ function fixedStat(records: readonly RunRecord[], days: number): FixedStat {
   };
 }
 
+function endingStat(records: readonly RunRecord[]): EndingStat {
+  const values = records.map((r) => r.nodes.ending);
+  const within = (minutes: number): number => values.filter((v) => v !== null && stepsToMinutes(v) <= minutes).length / Math.max(1, records.length);
+  return {
+    runs: records.length,
+    reached: values.filter((v) => v !== null).length,
+    p25: toMinutes(quantile(values, 0.25)),
+    p50: toMinutes(quantile(values, 0.5)),
+    p75: toMinutes(quantile(values, 0.75)),
+    within120: within(120),
+    within150: within(150),
+    within180: within(180),
+    within240: within(240),
+  };
+}
+
+type Phase = 'twoDistricts' | 'campus' | 'after';
+
+/** 一局里某个时期的游戏日范围（从 0 数起，含两端），没有这个时期为 null。开通那天只有半天，不算。 */
+function phaseDays(r: RunRecord, phase: Phase): [number, number] | null {
+  const day = (step: number | null | undefined): number | null => (step === null || step === undefined ? null : Math.floor(step / DAY_STEPS));
+  const last = r.days - 1;
+  const officeDay = day(r.nodes.officeOpened);
+  const campusDay = day(r.nodes.campusOpened);
+  // 结局在做日结的那一步记下，那一天的订单已经算在内，所以结局那一天是 ending / DAY_STEPS - 1
+  const endingDay = r.nodes.ending === null || r.nodes.ending === undefined ? null : Math.round(r.nodes.ending / DAY_STEPS) - 1;
+  let range: [number, number] | null = null;
+  if (phase === 'twoDistricts' && officeDay !== null) range = [officeDay + 1, campusDay !== null ? campusDay - 1 : last];
+  if (phase === 'campus' && campusDay !== null) range = [campusDay + 1, endingDay ?? last];
+  if (phase === 'after' && endingDay !== null) range = [endingDay + 1, last];
+  return range !== null && range[0] <= range[1] ? range : null;
+}
+
+function shareRow(records: readonly RunRecord[], phase: Phase): ShareRow {
+  const districts = 3;
+  const noon = new Array<number>(districts).fill(0);
+  const evening = new Array<number>(districts).fill(0);
+  const topNoon: number[] = [];
+  const topEvening: number[] = [];
+  let runs = 0;
+  let days = 0;
+  for (const r of records) {
+    const range = phaseDays(r, phase);
+    if (range === null || r.peakOrders === undefined) continue;
+    runs += 1;
+    for (let d = range[0]; d <= range[1]; d++) {
+      days += 1;
+      for (const [peak, total, tops] of [
+        [r.peakOrders.noon[d], noon, topNoon],
+        [r.peakOrders.evening[d], evening, topEvening],
+      ] as const) {
+        if (peak === undefined) continue;
+        const sum = peak.reduce((a, b) => a + b, 0);
+        peak.forEach((n, k) => {
+          total[k] = (total[k] as number) + n;
+        });
+        if (sum > 0) tops.push(Math.max(...peak) / sum);
+      }
+    }
+  }
+  return {
+    runs,
+    days,
+    noon,
+    evening,
+    topNoon: { p50: quantile(topNoon, 0.5), p75: quantile(topNoon, 0.75) },
+    topEvening: { p50: quantile(topEvening, 0.5), p75: quantile(topEvening, 0.75) },
+  };
+}
+
 function dailyStats(records: readonly RunRecord[], days: number): DailyStat[] {
   return Array.from({ length: days }, (_, d) => {
     const rows = records.map((r) => r.daily[d]).filter((x): x is NonNullable<typeof x> => x !== undefined);
@@ -254,6 +398,7 @@ function dailyStats(records: readonly RunRecord[], days: number): DailyStat[] {
       balance: medianOf(rows.map((row) => row.balance)),
       income: medianOf(rows.map((row) => row.income)),
       spent: medianOf(rows.map((row) => row.spent)),
+      stations: medianOf(rows.map((row) => row.stations)),
       drones: medianOf(rows.map((row) => row.drones)),
       stars,
       onTimePct,
@@ -287,10 +432,109 @@ export function summarize(records: readonly RunRecord[], label: string): Summary
       saving: savingStat(mine),
       purchaseTypes: purchaseTypeStats(mine),
       fixed: fixedStat(mine, days),
+      ending: endingStat(mine),
+      shares: { twoDistricts: shareRow(mine, 'twoDistricts'), campus: shareRow(mine, 'campus'), after: shareRow(mine, 'after') },
       daily: dailyStats(mine, days),
     };
   });
   return { label, seeds, days, policies };
+}
+
+// ---- 校准目标的核对 ----
+
+function inRange(v: number | null, range: readonly [number, number]): boolean {
+  return v !== null && v >= range[0] && v <= range[1];
+}
+
+/** 占比最大的片区的名称和比例，没有订单时为 null。 */
+function topDistrict(counts: readonly number[]): { name: string; share: number } | null {
+  const sum = counts.reduce((a, b) => a + b, 0);
+  if (sum === 0) return null;
+  const names = ['老街', '写字楼区', '大学城'];
+  let best = 0;
+  counts.forEach((n, k) => {
+    if (n > (counts[best] as number)) best = k;
+  });
+  return { name: names[best] as string, share: (counts[best] as number) / sum };
+}
+
+/**
+ * 按校准目标逐条核对，只核对汇总里有的玩法。核对的是这一批数据本身，前期节点「不变坏」要拿另一批数据对照，这里只核对它们在目标区间内。
+ * 目标写在 GOALS 里：均衡玩法结局的中位数和四分位，四种不需要判断的玩法在 180 分钟内到达结局的比例，攒钱时间，前期节点，订单占比。
+ */
+export function goalChecks(summary: Summary): GoalCheck[] {
+  const checks: GoalCheck[] = [];
+  const [lo, hi] = GOALS.endingMinutes;
+  const balanced = summary.policies.find((p) => p.id === 'balanced');
+  if (balanced !== undefined) {
+    const e = balanced.ending;
+    checks.push({
+      goal: `均衡玩法的结局中位数在 ${lo} 到 ${hi} 分钟`,
+      value: `${fm(e.p50)}，局内到达 ${fp(e.reached / Math.max(1, e.runs))}`,
+      pass: inRange(e.p50, GOALS.endingMinutes),
+    });
+    checks.push({
+      goal: `均衡玩法的结局四分位也在 ${lo} 到 ${hi} 分钟`,
+      value: `${fm(e.p25)} 到 ${fm(e.p75)}`,
+      pass: inRange(e.p25, GOALS.endingMinutes) && inRange(e.p75, GOALS.endingMinutes),
+    });
+    checks.push({
+      goal: `均衡玩法在 ${GOALS.endingWithin} 分钟内到达结局的比例不低于 ${fp(GOALS.endingShare)}`,
+      value: fp(e.within240),
+      pass: e.within240 >= GOALS.endingShare,
+    });
+    checks.push({
+      goal: `均衡玩法第一天升到二星的比例不低于 ${fp(GOALS.dayOneStar2)}`,
+      value: fp(balanced.day1Star2),
+      pass: balanced.day1Star2 >= GOALS.dayOneStar2,
+    });
+  }
+  const four = STARS_V1.rules.find((r) => r.star === 4);
+  checks.push({
+    goal: `四星的准时率线不超过 ${GOALS.fourStarLine}%`,
+    value: four === undefined ? '-' : `${four.onTimeMin}%`,
+    pass: four !== undefined && four.onTimeMin <= GOALS.fourStarLine,
+  });
+  for (const id of WEAK_POLICIES) {
+    const p = summary.policies.find((x) => x.id === id);
+    if (p === undefined) continue;
+    checks.push({
+      goal: `${p.name}在 ${GOALS.weakWithin} 分钟内到达结局的比例不超过 ${fp(GOALS.weakShare)}`,
+      value: fp(p.ending.within180),
+      pass: p.ending.within180 <= GOALS.weakShare,
+    });
+  }
+  for (const p of summary.policies) {
+    checks.push({
+      goal: `${p.name}的每一次购买，攒钱时间不超过 ${GOALS.savingDays} 个游戏日`,
+      value: `最长 ${fm(p.saving.savingDaysMax, 2)} 天，${fp(p.saving.savingWithinTwoDays)} 的局达到`,
+      pass: (p.saving.savingDaysMax ?? 0) <= GOALS.savingDays,
+    });
+  }
+  if (balanced !== undefined) {
+    const early = NODE_INFO.filter((i) => (MAIN_NODES as readonly string[]).includes(i.id) && i.target !== null && i.id !== 'ending');
+    const out = early.filter((i) => !inRange(balanced.nodes[i.id].p50, i.target as readonly [number, number]));
+    checks.push({
+      goal: '均衡玩法的前期节点都在目标内',
+      value: out.length === 0 ? `${early.length} 个节点` : `不在目标内：${out.map((i) => `${i.label} ${fm(balanced.nodes[i.id].p50)}`).join('，')}`,
+      pass: out.length === 0,
+    });
+    const campus = balanced.shares.campus;
+    if (campus.days > 0) {
+      const noon = topDistrict(campus.noon);
+      const evening = topDistrict(campus.evening);
+      const noonSum = campus.noon.reduce((a, b) => a + b, 0);
+      const eveningSum = campus.evening.reduce((a, b) => a + b, 0);
+      const noonOffice = noonSum > 0 ? (campus.noon[1] as number) / noonSum : 0;
+      const eveningRest = eveningSum > 0 ? ((campus.evening[0] as number) + (campus.evening[2] as number)) / eveningSum : 0;
+      checks.push({
+        goal: `大学城开通之后，均衡玩法的午高峰主要是写字楼区的订单（占 ${fp(GOALS.peakLead)} 以上），晚高峰主要是老街和大学城的订单（合起来占 ${fp(GOALS.peakLead)} 以上）`,
+        value: `午高峰写字楼区 ${fp(noonOffice)}（最大的片区 ${noon === null ? '-' : noon.name}），晚高峰老街加大学城 ${fp(eveningRest)}（最大的片区 ${evening === null ? '-' : evening.name}）`,
+        pass: noonOffice >= GOALS.peakLead && eveningRest >= GOALS.peakLead,
+      });
+    }
+  }
+  return checks;
 }
 
 // ---- Markdown ----
@@ -447,24 +691,83 @@ export function renderMarkdown(summary: Summary): string {
 
   if (balanced !== undefined) {
     out.push('## 七 均衡玩法逐天（各局的中位数）', '');
+    const pct = (v: number | null | undefined): string => (v === null || v === undefined ? '-' : `${v}%`);
+    const starOf = (d: DailyStat, k: number): string => ((d.openShare[k] ?? 0) >= 0.5 ? fm(d.stars[k] ?? null, 0) : '-');
     out.push(
       ...table(
-        ['天', '日结前余额', '进账', '花费', '飞机数', '老街星', '老街最近两天准时率', '写字楼区开通', '写字楼区星', '写字楼区准时率'],
+        ['天', '日结前余额', '进账', '花费', '站数', '飞机数', '老街星', '老街准时率', '写字楼区开通', '写字楼区星', '写字楼区准时率', '大学城开通', '大学城星', '大学城准时率'],
         balanced.daily.map((d) => [
           `${d.day}`,
           fm(d.balance, 0),
           fm(d.income, 0),
           fm(d.spent, 0),
+          fm(d.stations, 0),
           fm(d.drones, 0),
           fm(d.stars[0] ?? null, 0),
-          d.onTimePct[0] === null || d.onTimePct[0] === undefined ? '-' : `${d.onTimePct[0]}%`,
+          pct(d.onTimePct[0]),
           fp(d.openShare[1] ?? null),
-          (d.openShare[1] ?? 0) >= 0.5 ? fm(d.stars[1] ?? null, 0) : '-',
-          d.onTimePct[1] === null || d.onTimePct[1] === undefined ? '-' : `${d.onTimePct[1]}%`,
+          starOf(d, 1),
+          pct(d.onTimePct[1]),
+          fp(d.openShare[2] ?? null),
+          starOf(d, 2),
+          pct(d.onTimePct[2]),
         ]),
       ),
       '',
     );
   }
+
+  out.push('## 八 结局', '');
+  out.push(
+    `三个片区全部四星的时间（一倍速，分钟）和到达的比例。目标是均衡玩法的中位数在 ${GOALS.endingMinutes[0]} 到 ${GOALS.endingMinutes[1]} 分钟，` +
+      `四种不需要判断的玩法在 ${GOALS.weakWithin} 分钟内到达的比例都不超过 ${fp(GOALS.weakShare)}。局内没有到达的当作无穷大，所以「-」表示这个分位数上的局没有到达。`,
+    '',
+  );
+  out.push(
+    ...table(
+      ['玩法', '局内到达', '中位数 (下四分位~上四分位)', '120 分钟前', '150 分钟前', `${GOALS.weakWithin} 分钟前`],
+      summary.policies.map((p) => {
+        const e = p.ending;
+        return [p.name, `${e.reached}/${e.runs}（${fp(e.reached / Math.max(1, e.runs))}）`, `${fm(e.p50)} (${fm(e.p25)}~${fm(e.p75)})`, fp(e.within120), fp(e.within150), fp(e.within180)];
+      }),
+    ),
+    '',
+  );
+
+  out.push('## 九 各片区在两场高峰里的订单占比', '');
+  out.push(
+    '每个时期从一件事发生之后的第一个整天算起，订单按下单时间落在午高峰还是晚高峰的时段分，按送往的片区合并全部种子。' +
+      '「写字楼区开通后」到大学城开通之前为止，「大学城开通后」到结局那一天为止（没到结局的局到局末），「结局之后」到局末。' +
+      '最后四列是每个（局、天）里单场高峰订单最多的片区占的比例。',
+    '',
+  );
+  const shareCells = (counts: readonly number[]): string => {
+    const sum = counts.reduce((a, b) => a + b, 0);
+    return sum === 0 ? '-' : counts.map((n) => `${((n / sum) * 100).toFixed(0)}`).join(' / ');
+  };
+  const shareRows: string[][] = [];
+  for (const p of summary.policies) {
+    const phases: [string, ShareRow][] = [
+      ['写字楼区开通后', p.shares.twoDistricts],
+      ['大学城开通后', p.shares.campus],
+      ['结局之后', p.shares.after],
+    ];
+    for (const [name, row] of phases) {
+      if (row.days === 0) continue;
+      shareRows.push([
+        p.name,
+        name,
+        `${row.runs}`,
+        shareCells(row.noon),
+        shareCells(row.evening),
+        `${fp(row.topNoon.p50)} / ${fp(row.topNoon.p75)}`,
+        `${fp(row.topEvening.p50)} / ${fp(row.topEvening.p75)}`,
+      ]);
+    }
+  }
+  out.push(...table(['玩法', '时期', '局数', '午高峰 老街 / 写字楼区 / 大学城（%）', '晚高峰 老街 / 写字楼区 / 大学城（%）', '午高峰最大片区：中位数 / 上四分位', '晚高峰最大片区：中位数 / 上四分位'], shareRows), '');
+
+  out.push('## 十 校准目标的核对', '');
+  out.push(...table(['目标', '这一批的数值', '达到'], goalChecks(summary).map((c) => [c.goal, c.value, c.pass ? '是' : '否'])), '');
   return out.join('\n') + '\n';
 }

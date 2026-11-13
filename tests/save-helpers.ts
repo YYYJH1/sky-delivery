@@ -47,7 +47,7 @@ export async function slotHashes(store: KeyValueStore): Promise<(string | null)[
   return Promise.all(SLOTS.map((slot) => hashOfSlot(store, slot)));
 }
 
-// ---- 带脚本的一局：换规矩卡、点击订单插队 ----
+// ---- 带脚本的一局：换策略卡、点击订单插队 ----
 const RULE_CHANGES: readonly [number, Partial<RuleSet>][] = [
   [400, { select: 'deadline' }],
   [1000, { zone: 'hybrid' }],
@@ -61,7 +61,7 @@ const RULE_CHANGES: readonly [number, Partial<RuleSet>][] = [
 
 /**
  * 在第 state.step 步开始之前执行的玩家操作，只由当前步和状态决定：
- * 按表换规矩卡，每隔 330 步点击队尾的等待订单让它插队。
+ * 按表换策略卡，每隔 330 步点击队尾的等待订单让它插队。
  * 参照的那一局和从存档恢复的那一局都用它，所以两边的操作完全相同。
  */
 export function applyScript(state: SimState): void {
@@ -103,11 +103,13 @@ function refundCommand(state: SimState): Command | null {
  * 经营模式里，在第 state.step 步开始之前的玩家操作。只由当前步和状态决定：
  * 参照的那一局和从存档恢复的那一局都用它，所以两边的操作完全相同。
  * 命令的种类尽量多：点开局的订单，按均衡玩法换卡、买飞机、停机位、建站、开通片区、升级起降口、买双层货箱，
- * 买就近降落，点击等待的订单插队，把当天买的飞机退回去。
+ * 有两座站之后第一时间买就近降落，点击等待的订单插队，把当天买的飞机退回去。
  */
 export function campaignScript(state: SimState): void {
   clickOpening(state);
   if (state.step % 10 === 0) {
+    // 就近降落要有两座站，买得起的时候先买，不然钱都被下面的购物清单花光了
+    if (isUnlocked(state, 'nearestLanding')) applyCommand(state, { type: 'buyNearestLanding' });
     for (const command of ruleCommands(state, POLICIES.balanced)) applyCommand(state, command);
     for (let n = 0; n < 6; n++) {
       const command = shoppingList(state, POLICIES.balanced).find((c) => quoteCommand(state, c).ok);
@@ -119,7 +121,6 @@ export function campaignScript(state: SimState): void {
     const id = state.pending[state.pending.length - 1];
     if (id !== undefined) applyCommand(state, { type: 'prioritizeOrder', order: id });
   }
-  if (state.step % 1700 === 850 && isUnlocked(state, 'nearestLanding')) applyCommand(state, { type: 'buyNearestLanding' });
   if (state.step % 2500 === 1250) {
     const command = refundCommand(state);
     if (command !== null) applyCommand(state, command);
@@ -128,7 +129,7 @@ export function campaignScript(state: SimState): void {
 
 /**
  * 一局很快就有各种东西的经营模式开局：老街和写字楼区都开通，各项开放全部打开，有一笔钱，已经快进过开局的五张订单。
- * 带脚本的运行从这里开始，几个游戏日之内就有多座站、多架飞机、两套规矩、各种日结和小结的记录。
+ * 带脚本的运行从这里开始，几个游戏日之内就有多座站、多架飞机、两套策略、各种日结和小结的记录。
  */
 export function richCampaign(seed = 7, money = 8000): SimState {
   const state = createState({ mode: 'campaign', seed });

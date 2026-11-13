@@ -1,4 +1,4 @@
-// 镜头：画板坐标和窗口坐标的换算，以及把整张地图放进窗口的算法。纯函数，不碰 DOM 和 Pixi。
+// 镜头：画板坐标和窗口坐标的换算，把已经显示的片区放进窗口的算法，以及镜头从一处挪到另一处的插值。纯函数，不碰 DOM 和 Pixi。
 //
 // 地图的世界坐标先转一个固定的角度放进画板（geometry.ts），镜头再把画板等比缩放并平移到窗口里：
 //   窗口坐标 = 画板坐标 × scale + (x, y)
@@ -27,15 +27,56 @@ export function snapToDevice(value: number, dpr: number): number {
 }
 
 /**
- * 把画板上的 content 等比放进 width 乘 height 的窗口，顶部和底部各留 insets，居中。
+ * 镜头缩放的上限，对 1920×1080 的窗口。屋顶和街上的细节是按缩放 1 画的，地图不放得比它还大：
+ * 再放大，细节就比画的时候还大，纹理要拉伸，也不再是同一个样子。窗口比 1920×1080 大时，
+ * 界面物件按窗口等比放大，上限跟着乘同一个倍数。
+ */
+export const MAX_ZOOM = 1;
+
+/**
+ * 把画板上的 content 等比放进 width 乘 height 的窗口，顶部和底部各留 insets，居中。缩放不超过 maxScale。
  * 偏移对齐设备像素，静态层烘焙成设备像素一一对应的纹理之后，画出来才不会发糊。
  */
-export function fitCamera(content: Rect, width: number, height: number, insets: Insets, dpr = 1): Camera {
+export function fitCamera(content: Rect, width: number, height: number, insets: Insets, dpr = 1, maxScale = Number.POSITIVE_INFINITY): Camera {
   const paneHeight = Math.max(1, height - insets.top - insets.bottom);
-  const scale = Math.min(Math.max(1, width) / content.w, paneHeight / content.h);
+  const scale = Math.min(Math.max(1, width) / content.w, paneHeight / content.h, maxScale);
   const x = (width - content.w * scale) / 2 - content.x * scale;
   const y = insets.top + (paneHeight - content.h * scale) / 2 - content.y * scale;
   return { scale, x: snapToDevice(x, dpr), y: snapToDevice(y, dpr) };
+}
+
+// ---- 镜头的移动 ----
+
+/** 片区第一次显示时，镜头拉远到新的外框用多久，毫秒。 */
+export const CAMERA_MOVE_MS = 800;
+
+/** 缓动：先慢后快再慢。进度 t 取 0 到 1，输出也是 0 到 1。 */
+export function easeInOut(t: number): number {
+  const c = clamp(t, 0, 1);
+  return c < 0.5 ? 4 * c * c * c : 1 - (-2 * c + 2) ** 3 / 2;
+}
+
+/**
+ * 两个镜头之间 t 处的镜头，t 取 0 到 1。缩放和偏移各自线性插值：
+ * 窗口坐标是画板坐标的双线性函数，所以画板上的每个点都沿直线从起点的位置挪到终点的位置。
+ */
+export function lerpCamera(a: Camera, b: Camera, t: number): Camera {
+  return { scale: a.scale + (b.scale - a.scale) * t, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+/** 一次镜头的移动：从 from 到 to，从 startMs 起用 durationMs。时间用同一个时钟的毫秒数，由调用者给。 */
+export interface CameraMove {
+  readonly from: Camera;
+  readonly to: Camera;
+  readonly startMs: number;
+  readonly durationMs: number;
+}
+
+/** 移动进行到 nowMs 时的镜头，以及移动是否已经结束。结束时给的就是 to 本身，偏移保持对齐设备像素。 */
+export function cameraMoveAt(move: CameraMove, nowMs: number): { readonly camera: Camera; readonly done: boolean } {
+  const progress = move.durationMs <= 0 ? 1 : clamp((nowMs - move.startMs) / move.durationMs, 0, 1);
+  if (progress >= 1) return { camera: move.to, done: true };
+  return { camera: lerpCamera(move.from, move.to, easeInOut(progress)), done: false };
 }
 
 export function boardToScreen(camera: Camera, bx: number, by: number): Vec {

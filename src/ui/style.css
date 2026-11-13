@@ -1,4 +1,7 @@
-/* 游戏页面的样式。界面是直角，纸白底，蓝黑细边，没有纸纹、毛边、阴影和动画。
+/* 游戏页面的样式。界面只有几类纸做的物件：热敏小票、白板和磁贴、便签、价签，加上日程、速度、片区几张纸条。
+   物件是直角（白板圆角 6，磁贴圆角 3），不套框，没有渐变和模糊的阴影，阴影是 2 到 3 像素错位的蓝黑色块。
+   纸的毛边、颗粒和投影是代码画的背景图（paper.ts），放在物件的 --sheet 变量里，由 .sheet::before 画在物件后面。
+   字体各用各的：小票是点阵字（只用 12、24、36 像素），白板、磁贴和便签是手写体，其余是黑体。
    颜色取自色表（src/content/palette.ts）。界面物件按 1920×1080 的尺寸写，--s 是窗口的缩放，由 game.ts 设置。
    四个角和上下正中的物件各自从自己的角落缩放，窗口不是 16:9 时物件也贴着窗口的边。 */
 :root {
@@ -12,7 +15,10 @@
   --note: #f4e27a;
   --urgent: #d8342a;
   --faint: rgba(34, 48, 74, 0.35);
-  --font: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --shade: rgba(34, 48, 74, 0.12);
+  --font: SkySans, "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --pixel: SkyPixel, "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --hand: SkyHand, "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 html,
@@ -70,6 +76,10 @@ body {
   left: 0;
   top: 0;
   padding: 20px 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   transform-origin: 0 0;
   transform: scale(var(--s));
 }
@@ -82,16 +92,35 @@ body {
   transform: scale(var(--s));
 }
 
+/* 左下角一行：价签（上面可以展开改装面板）在左，片区纸条在右，底边对齐。
+   价签的价格越买越高，几张价签合起来会变宽，纸条跟着往右让。价签一张都没有开放时，也给它们留着 700 的位置，纸条不会跳。
+   一行最宽不超过窗口（按界面物件的尺寸算），放不下时纸条折行。 */
 .bl {
   left: 0;
   bottom: 0;
   padding: 0 0 24px 24px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 24px;
+  width: max-content;
+  max-width: calc(100vw / var(--s) - 24px);
   transform-origin: 0 100%;
   transform: scale(var(--s));
+}
+
+.bl-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: none;
+  gap: 12px;
+  min-width: 700px;
+  pointer-events: none;
+}
+
+.bl-stack > * {
+  pointer-events: auto;
 }
 
 .tc {
@@ -118,17 +147,6 @@ body {
   transform: scale(var(--s));
 }
 
-/* 底部：片区纸条贴在价签右边（价签最宽约 650），一行，系统提示在它上面 */
-.bn {
-  left: calc(670px * var(--s));
-  bottom: 0;
-  width: max-content;
-  max-width: 1150px;
-  padding-bottom: 24px;
-  transform-origin: 0 100%;
-  transform: scale(var(--s));
-}
-
 /* 右侧：调度台。收起时在 300，展开时顶边抬到 110（展开的白板顶在速度纸条下面），高度够放九张卡和选片区 */
 .rm {
   right: 0;
@@ -146,7 +164,7 @@ body {
 .rt {
   right: 0;
   top: 0;
-  padding: 96px 24px 0 0;
+  padding: 108px 24px 0 0;
   transform-origin: 100% 0;
   transform: scale(var(--s));
 }
@@ -167,23 +185,148 @@ body {
   box-sizing: border-box;
 }
 
-.paper {
-  background: var(--paper);
-  border: 1.5px solid var(--ink);
+/* ---- 纸 ---- */
+
+/* 物件的背景图画在伪元素上，左上角对齐，右边和下边多出 5 个像素放投影，不被物件自己的边框盒裁掉。
+   isolation 让伪元素（z-index -1）停在物件的文字后面，又不掉到物件外面的东西后面。
+   后面的规则里 position 写成 absolute 的物件（小卡、开通价签、便签）比这一条靠后，不受它影响。 */
+.sheet {
+  position: relative;
+  isolation: isolate;
 }
 
-/* 小票：小票白，热敏黑 */
-.receipt {
-  background: var(--ticket);
-  border: 1.5px solid var(--ink);
-  color: var(--thermal);
-  padding: 12px 22px;
-  font-size: 26px;
+.sheet::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(100% + 5px);
+  height: calc(100% + 5px);
+  background: var(--sheet, none) 0 0 / 100% 100% no-repeat;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* 纸条：纸白，蓝黑细边，字用黑体。背景图是 strip 那一种 */
+.paper {
+  color: var(--ink);
+}
+
+/* 读屏和复制用的文字，看不见，不占位置 */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* 手画的记号：下划线、圈。SVG 画在父元素的范围里，拉伸时线宽不变 */
+.mark {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mark path {
+  vector-effect: non-scaling-stroke;
+}
+
+.mark-underline {
+  left: -2px;
+  right: -2px;
+  bottom: -5px;
+  width: calc(100% + 4px);
+  height: 8px;
+}
+
+.mark-circle {
+  left: -7px;
+  top: -6px;
+  width: calc(100% + 14px);
+  height: calc(100% + 12px);
+}
+
+.mark-circle.red {
+  stroke: var(--urgent);
+  stroke-width: 2.6;
+}
+
+/* ---- 点阵字：小票上的文字，只用 12、24、36 像素 ---- */
+.slip {
+  font-family: var(--pixel);
+  font-size: 24px;
+  line-height: 28px;
+  color: var(--thermal);
+  font-kerning: none;
+  font-synthesis: none;
+  text-rendering: optimizeSpeed;
+  -webkit-font-smoothing: none;
+}
+
+/* 原文里用全角空格隔开的几段，拆成几行写时，空格留在页面里但不占位置 */
+.gap {
+  display: none;
+}
+
+/* ---- 左上角的小票 ---- */
+.receipt {
+  min-width: 192px;
+  padding: 14px 20px 16px 18px;
+  white-space: nowrap;
+}
+
+.receipt .px-row {
+  display: block;
+  line-height: 31px;
+}
+
+.receipt .px-big {
+  font-size: 36px;
+  line-height: 38px;
+}
+
+/* 左上角小票下面：高峰进行中各片区的准时、超时、取消，目标写在下一行的小字里。离目标线最远的一行加粗，下面画一道手写的线 */
+.live {
+  padding: 8px 16px 10px;
+  font-size: 18px;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
 
-/* 日程纸条 */
+.live-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.live-row + .live-row {
+  margin-top: 4px;
+}
+
+.live-row.far .live-counts {
+  font-weight: 700;
+}
+
+.live-counts,
+.live-goal {
+  position: relative;
+  display: block;
+  white-space: nowrap;
+}
+
+.live-goal {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+/* ---- 顶部正中：日程纸条 ---- */
 .schedule {
   display: flex;
   align-items: center;
@@ -242,7 +385,7 @@ body {
   fill: var(--ink);
 }
 
-/* 速度纸条：文字就是按钮，当前的一项下面画一道线 */
+/* ---- 右上：速度纸条。文字就是按钮，当前的一项下面画一道手写的线 ---- */
 .speed {
   display: flex;
   gap: 24px;
@@ -252,42 +395,45 @@ body {
 }
 
 .word {
+  position: relative;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
 }
 
-.word.on {
-  border-bottom-color: var(--ink);
-}
-
-/* 价签 */
+/* ---- 价签：纸白，切角，打孔，只有文字。余额不足时文字降到 35% ---- */
 .tags {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   pointer-events: auto;
 }
 
 .tag {
-  background: var(--paper);
-  border: 1.5px solid var(--ink);
-  padding: 10px 20px;
-  font-size: 22px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 18px 0 26px;
+  font-size: 19px;
+  line-height: 22px;
   white-space: nowrap;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
+  color: var(--ink);
 }
 
-.tag.dim {
-  color: var(--faint);
+.tag b {
+  font-weight: 700;
 }
 
-.tag.on {
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 5px;
+.tag-text {
+  position: relative;
 }
 
-/* 改装面板 */
+.tag.dim .tag-text {
+  opacity: 0.35;
+}
+
+/* ---- 改装面板 ---- */
 .upgrades {
   min-width: 600px;
   padding: 6px 0;
@@ -304,7 +450,7 @@ body {
 
 .upgrade-name {
   font-size: 22px;
-  font-weight: bold;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -320,7 +466,7 @@ body {
   opacity: 0.35;
 }
 
-/* 站点小卡 */
+/* ---- 站点小卡 ---- */
 .card {
   position: absolute;
   width: 270px;
@@ -334,27 +480,30 @@ body {
 .card-title {
   margin-bottom: 4px;
   font-size: 22px;
-  font-weight: bold;
+  font-weight: 700;
 }
 
 .refund {
   margin-top: 8px;
   text-wrap: balance;
-  word-break: keep-all; /* 中文只在标点和空格处折行，不把「今天能退」拆开 */
+  word-break: keep-all; /* 中文只在标点和空格处折行，不把「当日购买可退」拆开 */
   overflow-wrap: anywhere;
   cursor: pointer;
   text-decoration: underline;
+  text-decoration-thickness: 2px;
   text-underline-offset: 4px;
 }
 
-/* 地图上：选屋顶时候选屋顶旁边的文字，鼠标停在小票上的提示。不挡鼠标，位置和字号由 game.ts 给 */
+/* ---- 地图上：选屋顶时候选屋顶旁边的文字，鼠标停在小票上的提示 ----
+   位置和字号由 game.ts 给，不挡鼠标。小纸条，用错位的色块当阴影，不用背景图 */
 .roof-label,
 .map-tooltip {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
   background: var(--paper);
-  border: 1.5px solid var(--ink);
+  border: 1px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--shade);
   line-height: 1.4;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -362,6 +511,26 @@ body {
 
 .roof-label {
   padding: 5px 7px;
+}
+
+/* 文字离开屋顶时连回屋顶的细线，画在文字下面，不挡鼠标 */
+.roof-leaders {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.roof-leader {
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+
+.roof-leader-dot {
+  fill: var(--ink);
 }
 
 .roof-label.dim {
@@ -372,7 +541,7 @@ body {
   padding: 5px 8px;
 }
 
-/* 系统提示 */
+/* ---- 系统提示 ---- */
 .toast {
   padding: 10px 24px;
   max-width: 1000px;
@@ -380,7 +549,7 @@ body {
   text-align: center;
 }
 
-/* 菜单 */
+/* ---- 菜单 ---- */
 .menu {
   min-width: 210px;
   padding: 6px 0;
@@ -430,7 +599,7 @@ body {
   pointer-events: auto;
 }
 
-/* 片区纸条：片区名，星，升星的条件和当前值，一行 */
+/* ---- 片区纸条：片区名，五颗手画的星，升星的条件和当前值，一行 ---- */
 .note {
   box-sizing: border-box;
   max-width: 1150px;
@@ -441,49 +610,72 @@ body {
 }
 
 .note-name {
+  position: relative;
   font-size: 23px;
-  font-weight: bold;
+  font-weight: 700;
 }
 
 .note-name.switch {
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 5px;
 }
 
 .stars {
+  display: inline-block;
   margin-left: 8px;
-  font-size: 21px;
-  letter-spacing: 2px;
+  vertical-align: -4px;
 }
 
-/* 地图上还没开通的片区：开通价签摆在片区中间 */
+.stars-art {
+  display: block;
+  overflow: visible;
+}
+
+.star {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+.star.on {
+  fill: var(--ink);
+}
+
+/* 片区纸条第二行：距离保住星级的余量，距离升星还差几单 */
+.note-extra {
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+/* ---- 地图上还没开通的片区：开通价签摆在片区中间 ---- */
 .open-tag {
   position: absolute;
   transform-origin: 50% 50%;
   pointer-events: auto;
 }
 
-/* 便签：贴在日程纸条右端的下面，略微倾斜 */
+/* ---- 便签：贴在它说的东西旁边，手写体，略微倾斜。位置由 TipNote 算，放在窗口坐标里 ---- */
 .tip {
   position: absolute;
-  right: 80px;
-  top: 100%;
-  width: 300px;
+  left: 0;
+  top: 0;
+  width: 288px;
   box-sizing: border-box;
-  margin-top: 10px;
-  padding: 10px 16px 12px;
-  background: var(--note);
+  padding: 14px 18px 18px;
   color: var(--ink);
-  font-size: 20px;
-  line-height: 1.4;
+  font-family: var(--hand);
+  font-size: 22px;
+  line-height: 30px;
+  word-break: keep-all; /* 中文只在标点和空格处折行，一行放不下时才在字中间断开 */
+  overflow-wrap: anywhere;
+  line-break: strict;
   text-wrap: balance;
   cursor: pointer;
-  transform-origin: 100% 0;
-  transform: rotate(1.6deg);
+  pointer-events: auto;
+  transform-origin: 0 0;
 }
 
-/* 结局 */
+/* ---- 结局 ---- */
 .ending {
   max-width: 560px;
   padding: 16px 32px;
@@ -494,28 +686,31 @@ body {
   cursor: pointer;
 }
 
-/* 调度台：白板白，铝框灰的边 */
+/* ---- 调度台：白板白，铝框灰的边，圆角 6。标题和栏目名用手写体，磁贴下面的小字用黑体 ---- */
 .board {
-  background: var(--board);
-  border: 6px solid var(--frame);
   color: var(--ink);
 }
 
 .board.collapsed {
   width: 200px;
-  padding: 10px 14px 12px;
+  padding: 12px 16px 16px;
   cursor: pointer;
 }
 
 .board.expanded {
   width: 480px;
-  padding: 8px 18px 0;
+  padding: 10px 24px 26px;
 }
 
 .board-title {
-  font-size: 26px;
-  font-weight: bold;
-  line-height: 1.45;
+  font-family: var(--hand);
+  font-size: 28px;
+  line-height: 38px;
+}
+
+.board.expanded .board-title {
+  font-size: 34px;
+  line-height: 46px;
 }
 
 .board-title.clickable {
@@ -523,48 +718,70 @@ body {
 }
 
 .board-sub {
-  margin-bottom: 6px;
-  font-size: 15px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 18px;
   opacity: 0.65;
 }
 
 /* 收起时当前选中的卡，一张一条蓝黑的磁贴 */
 .board-picked {
-  margin-top: 4px;
+  margin-top: 5px;
   padding: 2px 10px;
+  border-radius: 3px;
   background: var(--ink);
-  color: var(--board);
+  color: var(--paper);
+  font-family: var(--hand);
   font-size: 18px;
-  line-height: 1.5;
+  line-height: 26px;
 }
 
-/* 展开时标题在左，两套规矩的页签在右 */
+/* 展开时标题在左，两套策略的页签在右 */
 .board-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  margin-bottom: 4px;
 }
 
 .board-tabs {
   display: flex;
-  gap: 22px;
-  font-size: 21px;
+  gap: 26px;
+  padding-right: 10px;
+  font-family: var(--hand);
+  font-size: 22px;
+}
+
+.board-tabs .word,
+.picker-choices .word {
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+.board-tabs .word.on,
+.picker-choices .word.on {
+  opacity: 1;
 }
 
 .board-col-title {
+  position: relative;
   display: inline-block;
-  margin: 8px 0 6px;
-  border-bottom: 1.5px solid var(--ink);
-  font-size: 20px;
-  font-weight: bold;
-  line-height: 1.3;
+  margin: 12px 0 8px;
+  font-family: var(--hand);
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.board-col-title .mark {
+  stroke-opacity: 0.35;
+  stroke-width: 1.4;
 }
 
 /* 每栏的磁贴排成两列 */
 .cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 8px;
+  gap: 8px 14px;
 }
 
 .magnet-wrap {
@@ -576,53 +793,59 @@ body {
   grid-column: 1 / -1;
 }
 
-/* 磁贴：选中的蓝黑实心，没选中的白底细边，没开放的虚线边 */
+/* 磁贴：选中的蓝黑实心配纸白手写字，没选中的白底蓝黑细边，没开放的虚线边 */
 .magnet {
   position: relative;
   box-sizing: border-box;
-  padding: 3px 10px 4px;
-  border: 1.5px solid var(--ink);
+  min-height: 30px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
   background: var(--board);
   cursor: pointer;
 }
 
 .magnet.on {
   background: var(--ink);
-  color: var(--board);
+  color: var(--paper);
 }
 
 .magnet.locked {
-  border: 1.5px dashed var(--faint);
-  color: rgba(34, 48, 74, 0.55);
+  border: 1px dashed var(--ink);
+  opacity: 0.6;
   cursor: default;
 }
 
 .magnet.block-lock {
-  padding: 8px 12px;
-  color: rgba(34, 48, 74, 0.8);
-  font-size: 16px;
+  padding: 6px 12px;
+  font-size: 14px;
   line-height: 1.4;
 }
 
 .magnet-name {
-  font-size: 19px;
-  font-weight: bold;
-  line-height: 1.3;
+  font-family: var(--hand);
+  font-size: 18px;
+  line-height: 28px;
   white-space: nowrap;
 }
 
 .magnet-desc {
-  padding-top: 1px;
-  font-size: 14px;
-  line-height: 1.25;
+  padding: 3px 2px 0;
+  font-size: 13px;
+  line-height: 17px;
+  word-break: keep-all; /* 中文只在标点和空格处折行，一行放不下时才在字中间断开 */
+  overflow-wrap: anywhere;
+  line-break: strict;
   text-wrap: balance;
 }
 
 .magnet-desc.locked {
-  color: rgba(34, 48, 74, 0.8);
+  opacity: 0.8;
 }
 
-/* 代价：悬停时出现在白板左边，不占白板里的位置。右列的磁贴要多跨过左列和空隙 */
+/* 代价：悬停时出现在白板左边，不占白板里的位置。小纸条，右列的磁贴要多跨过左列和空隙 */
 .magnet-cost {
   display: none;
   position: absolute;
@@ -632,67 +855,82 @@ body {
   width: 270px;
   padding: 8px 14px;
   background: var(--paper);
-  border: 1.5px solid var(--ink);
+  border: 1px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--shade);
   color: var(--ink);
+  font-family: var(--font);
   font-size: 18px;
-  font-weight: normal;
+  font-weight: 400;
   line-height: 1.4;
   white-space: normal;
 }
 
 .magnet-cost.right {
-  right: calc(200% + 48px);
+  right: calc(200% + 44px);
 }
 
 .magnet:hover .magnet-cost {
   display: block;
 }
 
-/* 选「某一片的先送」时，在这一栏里多出一行：提示和已开通的片区 */
+/* 选「{片区}优先」时，在这一栏里多出一行：提示和已开通的片区 */
 .picker {
-  padding: 6px 12px 8px;
-  border-left: 3px solid var(--ink);
+  padding: 4px 2px 6px;
 }
 
 .picker-prompt {
-  font-size: 15px;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .picker-choices {
   display: flex;
-  gap: 22px;
+  gap: 24px;
   margin-top: 4px;
-  font-size: 20px;
+  font-family: var(--hand);
+  font-size: 21px;
 }
 
-/* 白板底部的小票条 */
+/* 白板底部：用一段胶带贴着一张小票条，写上一场同类高峰的结果 */
 .board-ticket {
-  margin: 12px -18px 0;
-  padding: 8px 18px;
-  background: var(--ticket);
-  border-top: 1.5px solid var(--ink);
-  color: var(--thermal);
-  font-size: 17px;
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 22px auto 0;
+  padding: 16px 20px 18px;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
-/* 长小票：高峰小结和日结 */
+.board-ticket-line {
+  display: block;
+  line-height: 30px;
+}
+
+.tape {
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  width: 72px;
+  height: 19px;
+  margin-left: -36px;
+  transform: rotate(-3deg);
+  background-repeat: no-repeat;
+  background-size: 72px 19px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ---- 长小票：高峰小结和日结。点阵字，全部黑白，分隔用一行短横线，底部的操作是带下划线的文字 ---- */
 .long-ticket {
-  width: 400px;
-  padding: 16px 22px 14px;
-  background: var(--ticket);
-  border: 1.5px solid var(--ink);
-  color: var(--thermal);
-  font-size: 19px;
-  line-height: 1.45;
-  font-variant-numeric: tabular-nums;
+  width: 402px;
+  padding: 18px 21px 24px;
+  line-height: 26px;
 }
 
 .ticket-title {
-  font-size: 26px;
-  font-weight: bold;
-  line-height: 1.35;
+  font-size: 36px;
+  line-height: 42px;
 }
 
 .long-ticket .ticket-title {
@@ -700,32 +938,59 @@ body {
 }
 
 .ticket-sub {
-  font-size: 18px;
+  font-size: 24px;
+  line-height: 26px;
 }
 
+/* 一行短横线：横线是点阵字里的减号，超出的部分裁掉 */
 .sep {
-  margin: 9px 0;
-  border-top: 1.5px dashed var(--thermal);
+  height: 16px;
+  overflow: hidden;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.sep::before {
+  content: "------------------------------------------------";
 }
 
 .trow {
   display: flex;
   justify-content: space-between;
+  white-space: nowrap;
 }
 
 .trow.indent {
-  padding-left: 22px;
+  padding-left: 24px;
+}
+
+/* 有一行带纪录的小字时，所有行都是三列：名称，数，纪录。数还是靠右对齐 */
+.trow.rec {
+  display: grid;
+  grid-template-columns: 1fr auto 84px;
+  column-gap: 6px;
+  align-items: baseline;
+}
+
+.trow.rec .tval {
+  text-align: right;
+}
+
+.record {
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* 刚破的纪录：加下划线 */
+.record.fresh {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 
 .thead {
-  display: grid;
-  grid-template-columns: 5em 1fr;
   margin-bottom: 2px;
-  font-size: 17px;
-}
-
-.thead .dh {
-  padding-left: 3.4em;
 }
 
 .thead.plain {
@@ -734,56 +999,95 @@ body {
 
 .drow {
   display: grid;
-  grid-template-columns: 5em 3.3em 3.1em 1fr;
+  grid-template-columns: 96px 48px auto 1fr;
   align-items: baseline;
-  column-gap: 4px;
+  column-gap: 6px;
 }
 
-.drow.no-delta {
-  grid-template-columns: 5em 3.3em 1fr;
+.dname {
+  white-space: nowrap;
 }
 
-.dpct,
-.ddelta {
+.dpct {
   text-align: right;
+  white-space: nowrap;
 }
 
-/* 这一场这个片区没有订单：「没有订单」从准时率那一列起占满一行的其余部分，靠左 */
+/* 这一场这个片区没有订单：「无订单」从准时率那一列起占满一行的其余部分，靠左 */
 .dpct.none {
   grid-column: 2 / -1;
   text-align: left;
 }
 
 .dbar {
-  padding-left: 8px;
   font-size: 12px;
-  letter-spacing: -1px;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
+/* 这一场有没有达到目标：达标就写字，没达标的圈出来 */
+.dmark {
+  position: relative;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* 数下面的一行小字：这一场的目标，开局策略用的卡，连续达标 */
+.dgoal {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.dblock .dgoal {
+  padding-left: 0;
+}
+
+/* 整张小结的标记：判过的片区全部达标，并且没有退单。字用手画的圈圈起来，不套框 */
+.stamp {
+  margin: 8px 0 4px;
+}
+
+.stamp-text {
+  position: relative;
+  display: inline-block;
+  padding: 0 6px;
+}
+
+.stamp .mark {
+  stroke: var(--thermal);
+}
+
+.gain-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sentences > div {
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: balance;
+}
+
+/* 一张单的四段时间：两列文字，下面是四种密度拼成的横杠，说明里点名的那一段圈起来 */
 .segs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2px 10px;
+  gap: 0 8px;
 }
 
 .seg {
+  position: relative;
   justify-self: start;
-  padding: 0 10px;
-  margin-left: -10px;
-}
-
-/* 说明里点名的那一段：急红的圈 */
-.seg.longest {
-  padding: 2px 12px;
-  margin: -2px 0 -2px -12px;
-  border: 2px solid var(--urgent);
-  border-radius: 50%;
+  white-space: nowrap;
 }
 
 .segbar {
   display: block;
-  margin-top: 5px;
+  margin-top: 6px;
 }
 
 .segbar .ink {
@@ -797,47 +1101,44 @@ body {
 }
 
 .early-name {
-  font-weight: bold;
+  font-weight: 700;
 }
 
 .actions {
   display: flex;
-  gap: 40px;
-  margin-top: 12px;
+  gap: 36px;
+  margin-top: 14px;
 }
 
 .link {
   cursor: pointer;
   text-decoration: underline;
-  text-underline-offset: 5px;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
 }
 
 /* 刚送出的小结：露出标题和时段，从右边滑进来 */
 .ticket-peek {
   width: 300px;
-  padding: 10px 18px 12px;
-  background: var(--ticket);
-  border: 1.5px solid var(--ink);
-  color: var(--thermal);
+  padding: 14px 18px 22px;
   cursor: pointer;
   animation: ticket-in 0.6s ease-out;
+}
+
+.ticket-peek .ticket-title {
+  text-align: center;
 }
 
 /* 收起之后右边缘留的小标签 */
 .ticket-tab {
   margin-right: -24px;
-  padding: 6px 16px;
-  background: var(--ticket);
-  border: 1.5px solid var(--ink);
-  border-right: none;
-  color: var(--thermal);
-  font-size: 18px;
+  padding: 8px 18px 14px 18px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .ticket-tab.shifted {
   margin-right: 492px;
-  border-right: 1.5px solid var(--ink);
 }
 
 @keyframes ticket-in {

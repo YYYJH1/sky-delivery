@@ -6,10 +6,10 @@ The game ships four fonts. The woff2 files here are subsets: each keeps only the
 
 | File | Font | Version | Size |
 |---|---|---|---|
-| sky-serif-bold.woff2 | Noto Serif SC, instance at wght=700 | 2.003-H1 | about 41 KB |
-| sky-pixel.woff2 | Fusion Pixel Font 12px proportional, zh_hans | 2026.11.10 | about 19 KB |
-| sky-hand.woff2 | Xiaolai Regular | 3.126 | about 87 KB |
-| sky-sans.woff2 | Noto Sans SC, variable, weight axis kept from 400 to 700 | 2.004-H2 | about 149 KB |
+| sky-serif-bold.woff2 | Noto Serif SC, instance at wght=700 | 2.003-H1 | about 42 KB |
+| sky-pixel.woff2 | Fusion Pixel Font 12px proportional, zh_hans | 2026.11.10 | about 21 KB |
+| sky-hand.woff2 | Xiaolai Regular | 3.126 | about 97 KB |
+| sky-sans.woff2 | Noto Sans SC, variable, weight axis kept from 400 to 700 | 2.004-H2 | about 163 KB |
 
 The CSS names are SkySerif, SkyPixel, SkyHand and SkySans, see fonts.css.
 

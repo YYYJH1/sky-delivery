@@ -94,7 +94,7 @@ describe('时段统计和高峰小结：手工构造的订单', () => {
     expect(w.revenue).toBeCloseTo(27.5, 12);
   });
 
-  it('高峰小结：来单、准时、超时、其中还没送到的、退单、进账', () => {
+  it('高峰小结：订单、准时、超时、其中未送达的、取消、收入', () => {
     const state = build();
     state.step = 1800;
     const summary = peakSummary(state, 0, 'noon');
@@ -151,7 +151,7 @@ describe('各站的统计：独立重数', () => {
     expect(() => stationStats(state, 3, 50)).toThrow();
   });
 
-  it('不是由离店最近的站配送的订单的比例：「只由最近的站送」为零，「哪座站都能送」大于零', () => {
+  it('不是由离店最近的站配送的订单的比例：「仅限最近站点」为零，「全站协同」大于零', () => {
     const strict = runDays({ ...CITY, rules: { select: 'deadline', zone: 'strict' } }, 2);
     const global = runDays({ ...CITY, rules: { select: 'deadline', zone: 'global' } }, 2);
     expect(windowStats(strict, 0, 7200).nonNearestRate).toBe(0);
@@ -332,7 +332,7 @@ describe('飞行距离', () => {
     }
   });
 
-  it('一起送让每单飞行距离变短：载量 2 加顺路的一起送，同样的订单，全天每单飞行距离比一趟送一单少', () => {
+  it('一起送让每单飞行距离变短：载量 2 加顺路合并，同样的订单，全天每单飞行距离比单独配送少', () => {
     const run = (config: Record<string, unknown>): number =>
       runMetrics(runDays({ ...CITY, peakRate: 82, seed: 42, ...config } as never, 3), 3).mean.day.distPerOrder;
     expect(run({ capacity: 2, rules: { pool: 'any' } })).toBeLessThan(run({}));

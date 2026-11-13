@@ -1,6 +1,6 @@
 // 一轮派单：先选订单，再按站点分工挑飞机，载量不小于 2 且这一趟允许一起送时，还要试着把订单插进别的飞机的路线。
-// 流程：只在停机位上的可用飞机里找 → 按「别的站帮不帮」和电量检查筛出每张订单能用的飞机
-// → 按「先送哪张单」排序 → 依次给每张订单挑从它所在的站飞到店最快的一架，或者插进另一架飞机的路线。
+// 流程：只在停机位上的可用飞机里找 → 按「协同策略」和电量检查筛出每张订单能用的飞机
+// → 按「调度策略」排序 → 依次给每张订单挑从它所在的站飞到店最快的一架，或者插进另一架飞机的路线。
 // 「提前派出」的统计要一份比较名单：同一批飞机、同样的条件，按下单顺序排一遍会派出哪些订单。
 // 实际派单和比较名单都由 planRound 在一份试算上算出一串动作，选飞机和插入的办法是同一段代码。
 // 实际派单再执行这串动作，名单只取动作里的订单编号。
@@ -22,7 +22,7 @@ export interface Round {
   free: Drone[]; // 停在停机位上的可用飞机
   orders: Order[]; // 与 ctx.pendingIds 一一对应
   fly: Float64Array; // [飞机 × 订单] 飞机到店的距离
-  ok: Uint8Array; // [飞机 × 订单] 这架飞机能接这张单：电量够，并且「别的站帮不帮」允许
+  ok: Uint8Array; // [飞机 × 订单] 这架飞机能接这张单：电量够，并且「协同策略」允许
   eligible: number[]; // 至少有一架可用飞机能接的订单编号
   available: number; // 至少能接一张订单的飞机数
 }
@@ -200,7 +200,7 @@ function manualFirst(orders: readonly Order[], rest: readonly number[]): number[
 }
 
 /**
- * 本轮的派单先后：玩家点击插队的订单在最前（先点的先送），其余按这一栏选中的「先送哪张单」。
+ * 本轮的派单先后：玩家点击插队的订单在最前（先点的先送），其余按这一栏选中的「调度策略」。
  * 返回 round.orders 的下标。实际派单和只读的派单预览（ranking.ts）都从这里取，所以两边的先后一致。
  */
 export function roundSequence(round: Round, select: SelectRule): number[] {
@@ -231,7 +231,7 @@ export function dispatchRound(state: SimState): DispatchResult {
   const round = buildRound(state);
   const { ctx, free, orders } = round;
 
-  // 排序：玩家点击插队的订单在最前（先点的先送），其余按「先送哪张单」
+  // 排序：玩家点击插队的订单在最前（先点的先送），其余按「调度策略」
   const sequence = roundSequence(round, select);
   const plan = planRound(round, sequence);
 

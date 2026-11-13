@@ -191,9 +191,9 @@ describe.each(BACKENDS)('关闭再打开 10 次：%s', (_name, make) => {
       campaignOf(restored).away = [];
     }
     expect(hashState(restored)).toBe(hashes[1]);
-    // 提示文字：词表里的「存档读不出来，已换成 {时间} 的备份。」填上备份的保存时间
+    // 提示文字：词表里的「存档已损坏，已恢复为 {时间} 的备份。」填上备份的保存时间
     const text = fmt(STR.system.saveCorrupt, { savedAt: formatSavedAt(stamps[1] as number) });
-    expect(text).toMatch(/^存档读不出来，已换成 \d{4}-\d\d-\d\d \d\d:\d\d 的备份。$/);
+    expect(text).toMatch(/^存档已损坏，已恢复为 \d{4}-\d\d-\d\d \d\d:\d\d 的备份。$/);
     // 坏的存档原样留着，另存了一份带时间的副本
     expect(await reopened.get(mainKey)).toBe(nan);
     const copies = await listQuarantine(reopened);
@@ -295,8 +295,8 @@ describe('打开页面时结算离开期间的进账', () => {
     expect(campaignOf(booted.state).away).toEqual([booted.away]);
     expect(booted.state.step).toBe(state.step);
     expect(booted.state.orders).toEqual(state.orders);
-    // 词表里的「你不在的时候进账 ¥{金额}。」
-    expect(fmt(STR.system.awayIncome, { amount: booted.away?.amount ?? 0 })).toBe(`你不在的时候进账 ¥${amount}。`);
+    // 词表里的「获得离线收益 ¥{金额}。」
+    expect(fmt(STR.system.awayIncome, { amount: booted.away?.amount ?? 0 })).toBe(`获得离线收益 ¥${amount}。`);
     // 存档里的状态没有被改：结算只发生在读出来的状态上，要等保存才写回去
     expect(campaignOf((await loadGame(store, WALL)).state!).money).toBe(moneyBefore);
   });

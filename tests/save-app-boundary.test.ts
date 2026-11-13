@@ -170,12 +170,9 @@ describe('文字', () => {
 describe('类型检查的配置', () => {
   it('src/save 和 src/app 各有 tsconfig，并且都在 npm run typecheck 里', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: { typecheck: string } };
-    for (const [config, dir] of [
-      ['tsconfig.save.json', 'src/save'],
-      ['tsconfig.app.json', 'src/app'],
-    ] as const) {
+    for (const config of ['src/save/tsconfig.json', 'src/app/tsconfig.json'] as const) {
       const json = JSON.parse(readFileSync(join(ROOT, config), 'utf8')) as { include: string[] };
-      expect(json.include).toEqual([dir]);
+      expect(json.include).toEqual(['.']);
       expect(pkg.scripts.typecheck).toContain(`tsc -p ${config}`);
     }
   });

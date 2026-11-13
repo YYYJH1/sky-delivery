@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DISTRICT_RATES_V1 } from '../src/content/districts_v1.ts';
+import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { OPENING_ORDERS_V1 } from '../src/content/opening_v1.ts';
 import {
@@ -16,6 +17,7 @@ import {
   dispatchable,
   districtLambda,
   hashState,
+  openingMultiplier,
   refreshShops,
   step,
 } from '../src/core/index.ts';
@@ -170,14 +172,15 @@ describe('订单：每个开通的片区各自产生', () => {
     expect(state.orders.every((o) => (MAP_V1.shops[o.merchant] as { district: number }).district === 0)).toBe(true);
   });
 
-  it('各片区的来单数与内容表的来单率相符：基础来单率 / 60 × 曲线 × 星级倍数，三个片区长时间运行的统计检验', () => {
+  it('各片区的来单数与内容表的来单率相符：基础来单率 / 60 × 曲线 × 星级倍数 × 开业期倍数，三个片区长时间运行的统计检验', () => {
     const stars = [3, 2, 1];
     const days = 10;
     const state = runningState(7, stars, [true, true, true]);
     advance(state, days * DAY_STEPS);
     for (const k of [0, 1, 2]) {
+      // 三个片区从第 0 步起就开通，开业期从第 0 天算起
       let expected = 0;
-      for (let s = 0; s < days * DAY_STEPS; s++) expected += districtLambda(k, s % DAY_STEPS, stars[k] as number);
+      for (let s = 0; s < days * DAY_STEPS; s++) expected += districtLambda(k, s % DAY_STEPS, stars[k] as number, openingMultiplier(k, Math.floor(s / DAY_STEPS) + 1));
       const observed = state.orders.filter((o) => o.district === k).length;
       const z = (observed - expected) / Math.sqrt(expected);
       expect(Math.abs(z), `district ${k}: expected ${expected.toFixed(1)}, observed ${observed}`).toBeLessThan(4.5);
@@ -249,13 +252,16 @@ describe('订单：每个开通的片区各自产生', () => {
 
   it('片区升星之后店开张：星级改变后重算，新开张的店开始被抽到，没到星级的店不会被抽到', () => {
     const state = runningState(5, [1, 1, 1]);
-    advance(state, 3 * DAY_STEPS);
+    // 第一次日结之前星级不变：第一天的订单不会来自要二星以上才开张的店
+    advance(state, DAY_STEPS - 1);
     const late = MAP_V1.shops.map((s, i) => (s.district === 0 && s.opensAtStar > 1 ? i : -1)).filter((i) => i >= 0);
     expect(state.orders.some((o) => late.includes(o.merchant))).toBe(false);
     const before = state.orders.length;
     (campaignOf(state).districts[0] as { star: number }).star = 3;
     refreshShops(state);
-    advance(state, 8 * DAY_STEPS);
+    // 再过一天，期间只有一次日结。三星的老街没达到二星的线时记一次，计数不到两次，星级不变，四星才开张的店不会开
+    advance(state, DAY_STEPS);
+    expect((campaignOf(state).districts[0] as { star: number }).star).toBe(3);
     const after = state.orders.slice(before);
     const open3 = MAP_V1.shops.map((s, i) => (s.district === 0 && s.opensAtStar <= 3 ? i : -1)).filter((i) => i >= 0);
     expect(after.some((o) => late.includes(o.merchant))).toBe(true);
@@ -264,7 +270,7 @@ describe('订单：每个开通的片区各自产生', () => {
     expect(after.some((o) => (MAP_V1.shops[o.merchant] as { opensAtStar: number }).opensAtStar > 3)).toBe(false);
   });
 
-  it('订单只用订单随机数流：派单随机数流不动，规矩和购买不改变订单序列', () => {
+  it('订单只用订单随机数流：派单随机数流不动，策略和购买不改变订单序列', () => {
     const a = unlockAll(runningState(9));
     const b = runningState(9);
     must(a, { type: 'setRules', rules: { select: 'deadline' } });
@@ -466,7 +472,7 @@ describe('无头脚本 npm run campaign', () => {
       const r = cli(['--days', '3', '--seeds', '42', '--json', file]);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('日结之后');
-      expect(r.stdout).toMatch(/第 1 天：老街 1星 准时 51% 退单 5%/);
+      expect(r.stdout).toMatch(/第 1 天：老街 2星 准时 55% 退单 0%/);
       expect(r.stdout).toContain('开放：selectColumn@1800 priceTags@3600');
       expect(r.stdout).toContain('便签：firstOrder@0 autoDispatchOn@453');
       expect(r.stdout).toMatch(/午高峰小结 \w+/);
@@ -478,7 +484,7 @@ describe('无头脚本 npm run campaign', () => {
       };
       const report = json.runs[0]?.report ?? [];
       expect(report.map((d) => d.day)).toEqual([1, 2, 3]);
-      expect(report[0]?.districts[0]).toMatchObject({ district: 0, star: 1, onTimePct: 51, cancelPct: 5, kind: 'starKept' });
+      expect(report[0]?.districts[0]).toMatchObject({ district: 0, star: 2, onTimePct: 55, cancelPct: 0, kind: 'starUp' });
       expect(report[0]?.unlocked).toEqual([{ key: 'selectColumn', step: 1800 }, { key: 'priceTags', step: DAY_STEPS }]); // 日结在第 3600 步，归在第 1 天
       expect(report[0]?.tips.map((t) => t.id)).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay']);
       expect(report[1]?.unlocked).toEqual([]);
@@ -506,9 +512,9 @@ describe('无头脚本 npm run campaign', () => {
       const r = cli(['--days', '2', '--seeds', '42', '--commands', table]);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('命令 3 条');
-      expect(r.stdout).toMatch(/命令 步 100 .*buyBay.* -> 失败 priceTagsLocked 价格 140，共 8 次，最后一次在步 3600/);
+      expect(r.stdout).toMatch(new RegExp(`命令 步 100 .*buyBay.* -> 失败 priceTagsLocked 价格 ${ECONOMY_V1.bayBase}，共 8 次，最后一次在步 3600`));
       expect(r.stdout).toMatch(/命令 步 4100 .*buyBay.* -> 成功/);
-      expect(r.stdout).toMatch(/命令 步 50 .*buyDoubleBox.* -> 失败 priceTagsLocked 价格 180\n/);
+      expect(r.stdout).toMatch(new RegExp(`命令 步 50 .*buyDoubleBox.* -> 失败 priceTagsLocked 价格 ${ECONOMY_V1.doubleBoxPrice}\\n`));
       expect(r.stdout).toContain('站0 3/3/1'); // 一个停机位，一架飞机
     } finally {
       rmSync(table, { force: true });

@@ -39,6 +39,13 @@ export function inflate(r: Rect, d: number): Rect {
   return { x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d };
 }
 
+/** 盖住两块矩形的最小矩形。 */
+export function unionRect(a: Rect, b: Rect): Rect {
+  const x0 = Math.min(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  return { x: x0, y: y0, w: Math.max(a.x + a.w, b.x + b.w) - x0, h: Math.max(a.y + a.h, b.y + b.h) - y0 };
+}
+
 /**
  * 把 rect 挪到 zone 外面：向左、右、上、下各试一次，只挪到刚好不压住 zone（留 gap），
  * 取压住 others 最少的一个，一样少时取挪得最近的。返回要挪的量。rect 和 zone 本来就不相交时不用挪，返回 (0, 0)。

@@ -44,7 +44,7 @@ describe('星级条件的内容表', () => {
     expect([STARS_V1.maxStar, STARS_V1.windowDays, STARS_V1.dropFromStar, STARS_V1.dropAfterMisses, STARS_V1.endingStar]).toEqual([5, 2, 3, 2, 4]);
   });
 
-  it('最少样本：最近两天有结果的订单少于 10 张，这次日结星级不变', () => {
+  it('最少样本：最近两天完成的订单少于 10 张，这次日结星级不变', () => {
     expect(STARS_V1.minSample).toBe(10);
   });
 
@@ -163,7 +163,7 @@ describe('升星和掉星：决定函数', () => {
     expect(decide(1, counts(0, 0, 0), 0, 4)).toMatchObject({ star: 1, misses: 0, noUpgrade: 5, kind: 'noOrders' });
   });
 
-  it('最少样本：有结果的订单少于下限，星级和连续未达到的计数都不变，种类是 tooFewOrders，与没有订单的 noOrders 区分开', () => {
+  it('最少样本：完成的订单少于下限，星级和连续未达到的计数都不变，种类是 tooFewOrders，与没有订单的 noOrders 区分开', () => {
     const few = STARS_V1.minSample - 1;
     // 全部准时也不升星：刚开通的片区头一两天，一张准时的订单就是 100%
     expect(decide(1, counts(1, 1, 0))).toEqual({ star: 1, misses: 0, noUpgrade: 1, kind: 'tooFewOrders', needOnTimePct: null, needCancelPct: null });
@@ -185,7 +185,7 @@ describe('升星和掉星：决定函数', () => {
   });
 });
 
-describe('统计范围：最近两个游戏日里有结果的订单，按结果产生的步归日', () => {
+describe('统计范围：最近两个游戏日里完成的订单，按结果产生的步归日', () => {
   it('范围是今天和昨天，第一天只有今天', () => {
     expect(windowOfDay(0)).toEqual({ from: 0, to: DAY_STEPS });
     expect(windowOfDay(1)).toEqual({ from: 0, to: 2 * DAY_STEPS });
@@ -252,7 +252,7 @@ describe('统计范围：最近两个游戏日里有结果的订单，按结果�
 });
 
 describe('日结：数字', () => {
-  /** 第 0 天的订单：老街 6 张准时、3 张超时、1 张退单，写字楼区 2 张准时。再放一张第 0 天下单、日结时还没有结果的订单。 */
+  /** 第 0 天的订单：老街 6 张准时、3 张超时、1 张退单，写字楼区 2 张准时。再放一张第 0 天下单、日结时还没完成的订单。 */
   function dayZero(): SimState {
     const state = quietState();
     batchOrders(state, 0, 0, { onTime: 6, late: 3, cancelled: 1 });
@@ -306,7 +306,7 @@ describe('日结：数字', () => {
     expect(settleDay(open, 0).districts.map((d) => d.district)).toEqual([0, 1]);
   });
 
-  it('每个片区的一行带最近两天的统计：有结果的订单数、准时数、退单数、下取整的准时率和退单率', () => {
+  it('每个片区的一行带最近两天的统计：完成的订单数、准时数、退单数、下取整的准时率和退单率', () => {
     const state = quietState();
     batchOrders(state, 0, 0, { onTime: 7, late: 2, cancelled: 1 }); // 70%，10%
     state.step = DAY_STEPS;
@@ -393,7 +393,7 @@ describe('日结：口碑和新店', () => {
     expect(campaignOf(state).districts[0]?.star).toBe(1);
   });
 
-  it('最近两天没有有结果的订单：星级不变，计数也不变，写明没有订单', () => {
+  it('最近两天没有完成的订单：星级不变，计数也不变，写明没有订单', () => {
     const state = quietState();
     const campaign = campaignOf(state);
     campaign.districts[0]!.star = 3;
@@ -519,7 +519,7 @@ describe('日结的执行时机', () => {
     expect(a).toEqual(b);
   });
 
-  it('跑几天的日结记录：每天一条，下标就是游戏日，三项之和等于有结果的订单数，进账与按送达订单重算的相同', () => {
+  it('跑几天的日结记录：每天一条，下标就是游戏日，三项之和等于完成的订单数，进账与按送达订单重算的相同', () => {
     const state = campaignState({ seed: 44 });
     for (let i = 0; i < 4 * DAY_STEPS + 1; i++) {
       clickOpening(state);
@@ -537,7 +537,7 @@ describe('日结的执行时机', () => {
       if (o.tDeliver >= 0 && o.tDeliver < 4 * DAY_STEPS) byDay[Math.floor(o.tDeliver / DAY_STEPS)] = (byDay[Math.floor(o.tDeliver / DAY_STEPS)] as number) + o.rev;
     }
     days.forEach((d, i) => expect(d.income).toBeCloseTo(byDay[i] as number, 6));
-    // 独立的账：按订单重算每天下单数和有结果的订单数
+    // 独立的账：按订单重算每天下单数和完成的订单数
     days.forEach((d, i) => {
       const from = i * DAY_STEPS;
       const to = from + DAY_STEPS;
@@ -619,7 +619,7 @@ describe('片区纸条的数据', () => {
     expect(districtNote(state, 0)).toMatchObject({ atRisk: true, kind: 'toNextStar' });
   });
 
-  it('还没有有结果的订单：比率为 null，写 noData；没开通的片区 open 为 false，片区不存在时报错', () => {
+  it('还没有完成的订单：比率为 null，写 noData；没开通的片区 open 为 false，片区不存在时报错', () => {
     const state = quietState();
     atDay(state, 0);
     expect(districtNote(state, 0)).toMatchObject({ n: 0, onTimePct: null, cancelPct: null, kind: 'noData' });
@@ -627,7 +627,7 @@ describe('片区纸条的数据', () => {
     expect(() => districtNote(state, 3)).toThrow();
   });
 
-  it('有结果的订单少于下限：写 tooFew，不写升星的条件；恰好等于下限就照常写。第一天和第二天都一样', () => {
+  it('完成的订单少于下限：写 tooFew，不写升星的条件；恰好等于下限就照常写。第一天和第二天都一样', () => {
     const few = quietState();
     batchOrders(few, 0, 0, { onTime: M - 1 });
     atDay(few, 0, 2000);
@@ -684,7 +684,7 @@ describe('片区纸条的数据', () => {
 
 describe('片区纸条用哪一条：pickNoteKind', () => {
   const M = STARS_V1.minSample;
-  /** 一组有结果的订单：n 张，其中 onTime 张准时，cancelled 张退单。 */
+  /** 一组完成的订单：n 张，其中 onTime 张准时，cancelled 张退单。 */
   const c = counts;
 
   it('没有订单写 noData，不到下限写 tooFew，不论星级和第几天', () => {

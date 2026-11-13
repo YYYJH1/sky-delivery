@@ -235,7 +235,7 @@ function hashCampaign(h: Hasher, c: CampaignState): void {
   }
   h.nums(c.opening.orders);
   h.bool(c.opening.done);
-  // 口碑计数、各项开放的步、两套规矩、日结和小结的记录、便签、送达总数、结局
+  // 口碑计数、各项开放的步、两套策略、日结和小结的记录、便签、送达总数、结局、最近一场高峰的目标
   h.value(c.rating);
   h.value(c.unlocks);
   h.value(c.ruleSets);
@@ -244,6 +244,7 @@ function hashCampaign(h: Hasher, c: CampaignState): void {
   h.value(c.tips);
   h.num(c.delivered);
   h.value(c.ending);
+  h.value(c.goals);
   // 离开结算的记录
   h.value(c.away);
 }

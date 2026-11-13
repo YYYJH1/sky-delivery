@@ -16,7 +16,7 @@ export function campaignOf(state: SimState): CampaignState {
 }
 
 /**
- * 把各项开放全部打开：价签、调度台的栏和卡、片区的显示。午晚两套规矩不在其内，它随开通写字楼区自动出现。
+ * 把各项开放全部打开：价签、调度台的栏和卡、片区的显示。午晚两套策略不在其内，它随开通写字楼区自动出现。
  * 给不关心开放条件的命令测试用，开放条件本身的测试用没打开的状态。
  */
 export function unlockAll(state: SimState): SimState {
@@ -122,8 +122,8 @@ export interface OutcomeSpec {
 }
 
 /**
- * 放一张手工构造的订单。有结果的订单直接设好结局，并且从待派队列和退单检查队列里拿掉，所以推进状态时不会被再次处理。
- * 没有结果的订单留在待派队列里。订单要按下单的步从小到大放，编号才与下单的先后一致。
+ * 放一张手工构造的订单。完成的订单直接设好结局，并且从待派队列和退单检查队列里拿掉，所以推进状态时不会被再次处理。
+ * 没完成的订单留在待派队列里。订单要按下单的步从小到大放，编号才与下单的先后一致。
  */
 export function outcomeOrder(state: SimState, spec: OutcomeSpec): Order {
   const buildings = state.world.buildingsByDistrict[spec.district] as number[];

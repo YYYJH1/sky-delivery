@@ -74,15 +74,19 @@ export const toast = signal<ToastInfo | null>(null);
 export const windowView = signal<WindowView>(windowViewFor(DESIGN_WIDTH, DESIGN_HEIGHT));
 /** 同一个浏览器里已经有别的页面在运行，这个页面停止。 */
 export const blocked = signal(false);
+/** 地图画不出来（浏览器没有 WebGL）：页面上写一句话，界面其余部分照常显示。 */
+export const mapFailed = signal(false);
 /** 复制到剪贴板没成功时，把导出码放在菜单里，让玩家自己复制。 */
 export const exportCode = signal<string | null>(null);
 /** 菜单里的导入存档：展开了粘贴导出码的文本框。 */
 export const importOpen = signal(false);
+/** 声音开着没有，菜单里的开关按它写字。 */
+export const soundOn = signal(true);
 /** 调度台是展开的白板，不是收起的一小块。 */
 export const boardOpen = signal(false);
 /** 调度台展开后看哪一套，null 是跟着现在生效的那一套。只有分成午晚两套之后才有页签。 */
 export const boardTab = signal<PeakKey | null>(null);
-/** 点了「某一片的先送」，正在选片区。 */
+/** 点了「{片区}优先」，正在选片区。 */
 export const pickingDistrict = signal(false);
 /** 片区纸条显示哪个片区，不是已开通的片区时由 view-model 换成编号最小的已开通片区。 */
 export const noteDistrict = signal(0);
@@ -120,6 +124,8 @@ export interface Actions {
   exportSave(): void;
   /** 点菜单里的导入存档：展开或收起粘贴导出码的文本框。 */
   toggleImport(): void;
+  /** 点菜单里的声音开关。 */
+  toggleSound(): void;
   /** 玩家把导出码粘贴进了文本框：读进来，成为现在的存档，页面重新载入。读不出来时提示，现在的存档不受影响。 */
   importSave(code: string): void;
   quit(): void;
@@ -158,6 +164,7 @@ export const actions: Actions = {
   closeMenu: none,
   exportSave: none,
   toggleImport: none,
+  toggleSound: none,
   importSave: none,
   quit: none,
   clickBoard: none,

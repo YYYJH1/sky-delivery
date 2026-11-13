@@ -17,8 +17,10 @@ export const SAVE_FORMAT = 'sky-delivery-save';
  * 存档版本号，整数。存档的结构有不兼容的改动时加一，并在迁移表里补上旧版本到新版本的函数。
  * 版本 2：外层的内容版本从字符串改成整数，和内容表的版本号 src/content/version.ts 是同一个数。
  * 状态里加了经营模式的 campaign，以及它的 away 字段，字段表据此扩充。迁移见 migrate.ts。
+ * 版本 3：经营模式的高峰小结和日结多了目标线、达标标记、小结对照和每场的达标场数，campaign 多了最近一场高峰的目标 goals。
+ * 这些字段都可以是 null 或 0，旧存档里没有的由迁移补上。
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 
 /**
  * 内容版本号，取自内容表的 src/content/version.ts。内容表（地图、价格、星级线等）改到会影响已有存档时，

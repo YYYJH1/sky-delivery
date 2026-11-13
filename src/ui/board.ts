@@ -1,6 +1,6 @@
-// 调度台（右侧白板）的数据：三栏各有哪几张卡，哪张选中，哪张没开放，收起时的几行字，两套规矩的页签，底部的小票条。
+// 调度台（右侧白板）的数据：三栏各有哪几张卡，哪张选中，哪张没开放，收起时的几行字，两套策略的页签，底部的小票条。
 // 文字全部取自词表，规则编号和开放条件取自核心。点一张卡发的命令只带这一栏，见 ruleCommand。
-// 每一栏列哪些卡由内容表 rules_v1 决定，调度台里没有「一趟送一单」：词表里它的文字还在，沙盒模式用。
+// 每一栏列哪些卡由内容表 rules_v1 决定，调度台里没有「单独配送」：词表里它的文字还在，沙盒模式用。
 // 纯函数，不碰 DOM 和状态。
 import { CAMPAIGN_RULES_V1 } from '../content/rules_v1.ts';
 import { UNLOCKS_V1 } from '../content/unlocks_v1.ts';
@@ -14,7 +14,7 @@ import type { PeakKey } from './schedule.ts';
 /** 三栏在白板上的顺序。 */
 export const COLUMN_ORDER: readonly RuleColumnKey[] = ['select', 'pool', 'zone'];
 
-/** 三张「某一片的先送」，下标是片区编号。界面上它们合成一张卡，点了之后选片区。 */
+/** 三张「{片区}优先」，下标是片区编号。界面上它们合成一张卡，点了之后选片区。 */
 export const PRIO_RULES: readonly RuleId[] = ['prioOld', 'prioOffice', 'prioCampus'];
 
 /** 合成的那一张卡在界面里的键。 */
@@ -40,7 +40,7 @@ function prioDistrictOf(id: string): number | null {
 }
 
 export interface BoardCard {
-  /** 在界面里的键：规则编号，三张「某一片的先送」合成的那一张是 prio。 */
+  /** 在界面里的键：规则编号，三张「{片区}优先」合成的那一张是 prio。 */
   readonly key: string;
   readonly column: RuleColumnKey;
   readonly name: string;
@@ -96,7 +96,7 @@ export interface BoardView {
   /** 展开时显示的是哪一套，没分成两套时为 null。发命令时作为 peak。 */
   readonly shownPeak: PeakKey | null;
   readonly columns: readonly BoardColumn[];
-  /** 选「某一片的先送」时可以选的片区：已经开通的。 */
+  /** 选「{片区}优先」时可以选的片区：已经开通的。 */
   readonly picker: readonly PickerChoice[];
   readonly pickPrompt: string;
   /** 白板底部的小票条。 */
@@ -119,7 +119,7 @@ function lockText(key: UnlockKey): string | null {
   }
 }
 
-/** 白板上现在看的那一套规矩：分成两套之后取页签对应的那一套，没分开就是 state.rules。 */
+/** 白板上现在看的那一套策略：分成两套之后取页签对应的那一套，没分开就是 state.rules。 */
 function setShown(state: SimState, peak: PeakKey | null): RuleSet {
   const sets = state.campaign?.ruleSets ?? null;
   return sets === null || peak === null ? state.rules : sets[peak];
@@ -145,7 +145,7 @@ function cardOf(state: SimState, column: RuleColumnKey, id: RuleId, selectedId: 
   };
 }
 
-/** 三张「某一片的先送」合成的那一张。选中了其中一张时，名称是那个片区的，没选中时用默认的片区（写字楼区）。 */
+/** 三张「{片区}优先」合成的那一张。选中了其中一张时，名称是那个片区的，没选中时用默认的片区（写字楼区）。 */
 function prioCardOf(state: SimState, selectedId: string): BoardCard {
   const chosen = prioDistrictOf(selectedId);
   const shownRule = PRIO_RULES[chosen ?? UNLOCKS_V1.prioDistrict] as RuleId;
@@ -185,7 +185,7 @@ export function layoutCards(cards: readonly BoardCard[]): BoardCard[] {
   });
 }
 
-/** 「一趟送几单」和「别的站帮不帮」整栏一起开放，整栏锁着时返回锁它的那一项。「先送哪张单」的卡各有各的条件，没有整栏的锁。 */
+/** 「合单策略」和「协同策略」整栏一起开放，整栏锁着时返回锁它的那一项。「调度策略」的卡各有各的条件，没有整栏的锁。 */
 function columnLockOf(state: SimState, column: RuleColumnKey): UnlockKey | null {
   const first = offeredRules(column)[0];
   return column === 'select' || first === undefined ? null : ruleLock(state, column, first);
@@ -209,7 +209,7 @@ function columnOf(state: SimState, column: RuleColumnKey, selectedId: string): B
   return { key: column, title, locked: false, lockText: null, cards: layoutCards(cards) };
 }
 
-/** 选片区时的候选：已经开通的片区，每个对应一张「某一片的先送」。 */
+/** 选片区时的候选：已经开通的片区，每个对应一张「{片区}优先」。 */
 export function pickerChoices(state: SimState, selectedId: string): PickerChoice[] {
   const out: PickerChoice[] = [];
   state.campaign?.districts.forEach((d, k) => {
@@ -233,7 +233,7 @@ export function ticketLine(state: SimState, peak: PeakKey): string {
 }
 
 /**
- * 调度台现在的样子。「先送哪张单」一栏开放之前没有白板，返回 null。
+ * 调度台现在的样子。「调度策略」一栏开放之前没有白板，返回 null。
  * boardPeak 是展开后页签选的那一套，null 表示跟着现在生效的那一套。
  */
 export function computeBoard(state: SimState, boardPeak: PeakKey | null): BoardView | null {
@@ -246,7 +246,7 @@ export function computeBoard(state: SimState, boardPeak: PeakKey | null): BoardV
   const columns = COLUMN_ORDER.map((column) => columnOf(state, column, shown[column]));
 
   // 收起时列出现在生效的那一套，只列已经开放的栏，也只列调度台里有的卡：
-  // 没买双层货箱时核心内部按一趟送一单运行，这一栏没开放，不写它
+  // 没买双层货箱时核心内部按单独配送运行，这一栏没开放，不写它
   const active = setShown(state, split ? inForce : null);
   const picked: string[] = [];
   for (const column of COLUMN_ORDER) {

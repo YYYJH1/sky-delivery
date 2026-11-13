@@ -76,7 +76,7 @@ function importedFromCore(file: string): string[] {
 describe('源文件都在', () => {
   it('src/render 的主要文件', () => {
     const render = RENDER_FILES.map((f) => relative(RENDER, f));
-    for (const f of ['city.ts', 'streets.ts', 'river.ts', 'geometry.ts', 'camera.ts', 'districts.ts', 'scene.ts', 'layout.ts', 'look.ts', 'rng.ts', 'map-spec.ts', 'bake.ts', 'textures.ts', 'quads.ts', 'static-layers.ts', 'map-renderer.ts', 'draw/objects.ts', 'draw/props.ts']) {
+    for (const f of ['city.ts', 'streets.ts', 'river.ts', 'geometry.ts', 'camera.ts', 'daynight.ts', 'districts.ts', 'scene.ts', 'layout.ts', 'look.ts', 'rng.ts', 'map-spec.ts', 'bake.ts', 'textures.ts', 'quads.ts', 'static-layers.ts', 'map-renderer.ts', 'draw/objects.ts', 'draw/props.ts']) {
       expect(render).toContain(f);
     }
   });
@@ -115,7 +115,7 @@ describe('引用关系', () => {
   });
 
   it('界面层引用渲染模块时只引用 .ts 的文件，不引用烘焙、纹理这些画布细节', () => {
-    const allowed = ['camera.ts', 'districts.ts', 'geometry.ts', 'look.ts', 'map-renderer.ts', 'map-spec.ts', 'scene.ts', 'city.ts', 'city-types.ts'];
+    const allowed = ['camera.ts', 'daynight.ts', 'districts.ts', 'geometry.ts', 'look.ts', 'map-renderer.ts', 'map-spec.ts', 'scene.ts', 'city.ts', 'city-types.ts'];
     const bad: string[] = [];
     for (const file of listFiles(join(SRC, 'ui'), isCode)) {
       for (const spec of importsOf(file)) {
@@ -212,11 +212,11 @@ describe('依赖和类型检查', () => {
   });
 
   it('src/render 有 tsconfig，带 DOM，在 npm run typecheck 和根配置的引用里', () => {
-    const render = JSON.parse(readFileSync(join(ROOT, 'tsconfig.render.json'), 'utf8')) as { compilerOptions: { lib: string[] }; include: string[] };
-    expect(render.include).toEqual(['src/render']);
+    const render = JSON.parse(readFileSync(join(RENDER, 'tsconfig.json'), 'utf8')) as { compilerOptions: { lib: string[] }; include: string[] };
+    expect(render.include).toEqual(['.']);
     expect(render.compilerOptions.lib).toContain('DOM');
-    expect(pkg.scripts.typecheck).toContain('tsc -p tsconfig.render.json');
+    expect(pkg.scripts.typecheck).toContain('tsc -p src/render/tsconfig.json');
     const root = JSON.parse(readFileSync(join(ROOT, 'tsconfig.json'), 'utf8')) as { references: { path: string }[] };
-    expect(root.references.map((r) => r.path)).toContain('./tsconfig.render.json');
+    expect(root.references.map((r) => r.path)).toContain('./src/render/tsconfig.json');
   });
 });

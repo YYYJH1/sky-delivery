@@ -5,13 +5,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
+import { STARS_V1 } from '../src/content/stars_v1.ts';
 import { CAMPAIGN_RULES_V1 } from '../src/content/rules_v1.ts';
-import { DAY_STEPS, OrderStatus } from '../src/core/index.ts';
+import { DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, OrderStatus, addOrder, quoteCommand } from '../src/core/index.ts';
 import type { PeakRecord } from '../src/core/index.ts';
-import { CLICK_DELAY, DECIDE_EVERY, NODE_INFO, POLICIES, POLICY_IDS, chooseRoof, playGame, ruleCommands, shoppingList, stepsToMinutes } from '../tools/autoplay-lib.ts';
+import { CLICK_DELAY, DECIDE_EVERY, MAIN_NODES, NODE_INFO, POLICIES, POLICY_IDS, chooseRoof, peakOrdersOf, playGame, ruleCommands, shoppingList, stepsToMinutes } from '../tools/autoplay-lib.ts';
 import type { NodeId, RunRecord } from '../tools/autoplay-lib.ts';
 import { applyPatch } from '../tools/autoplay-patch.ts';
-import { quantile, renderMarkdown, summarize } from '../tools/autoplay-summary.ts';
+import { GOALS, WEAK_POLICIES, goalChecks, quantile, renderMarkdown, summarize } from '../tools/autoplay-summary.ts';
 import { createPool, nodesCsv, parseRunsJsonl, runsJsonl } from '../tools/autoplay.ts';
 import { campaignOf, must, quietState, withMoney } from './campaign-helpers.ts';
 
@@ -105,7 +106,7 @@ describe('补丁：把一份 JSON 合并进内容表，原地修改', () => {
 // ---- 玩法的规则 ----
 
 describe('玩法：购物清单', () => {
-  it('有空停机位的站先添飞机，没有空停机位就加停机位：开局的站 2 个停机位 2 架飞机，先加停机位，再添飞机', () => {
+  it('有空停机位的站先购买无人机，没有空停机位就新增停机位：开局的站 2 个停机位 2 架无人机，先新增停机位，再购买无人机', () => {
     const state = withMoney(quietState());
     const spec = { ...POLICIES.balanced, buys: { ...POLICIES.balanced.buys, district: false } }; // 先不看开通写字楼区
     const first = shoppingList(state, spec)[0];
@@ -114,16 +115,17 @@ describe('玩法：购物清单', () => {
     expect(shoppingList(state, spec)[0]).toEqual({ type: 'buyDrone', station: 0 });
   });
 
-  it('有几座站时，在有空停机位的站里飞机最少的那座添飞机，并列取编号小的', () => {
+  it('有几座站时，在有空停机位的站里无人机最少的那座购买无人机，并列取编号小的', () => {
     const state = withMoney(quietState());
-    for (const d of campaignOf(state).districts) d.open = true;
+    campaignOf(state).districts[1]!.open = true;
+    const spec = { ...POLICIES.balanced, buys: { ...POLICIES.balanced.buys, district: false } }; // 先不看开通大学城
     const second = must(state, { type: 'buildStation', roof: OFFICE_ROOFS[0] as number });
     must(state, { type: 'buyBay', station: 0 });
     must(state, { type: 'buyBay', station: 0 }); // 站 0：4 个停机位 2 架飞机，站 1：2 个停机位 0 架飞机
-    expect(shoppingList(state, POLICIES.balanced)[0]).toEqual({ type: 'buyDrone', station: second });
+    expect(shoppingList(state, spec)[0]).toEqual({ type: 'buyDrone', station: second });
     must(state, { type: 'buyDrone', station: second });
     must(state, { type: 'buyDrone', station: second }); // 站 1 满了（2 架），站 0 有 2 架
-    expect(shoppingList(state, POLICIES.balanced)[0]).toEqual({ type: 'buyDrone', station: 0 });
+    expect(shoppingList(state, spec)[0]).toEqual({ type: 'buyDrone', station: 0 });
   });
 
   it('写字楼区还没开通时，清单的第一项是开通它，开通之后是在写字楼区建站，选址不选小屋顶', () => {
@@ -131,13 +133,15 @@ describe('玩法：购物清单', () => {
     expect(shoppingList(state, POLICIES.balanced)[0]).toEqual({ type: 'openDistrict', district: 1 });
     campaignOf(state).districts[1]!.open = true;
     const list = shoppingList(state, POLICIES.balanced);
-    expect(list[0]?.type).toBe('buildStation');
-    const roof = (list[0] as { roof: number }).roof;
+    expect(list[0]).toEqual({ type: 'openDistrict', district: 2 }); // 写字楼区开通之后，下一个目标是大学城
+    const build = list.find((c) => c.type === 'buildStation');
+    expect(build).toBeDefined();
+    const roof = (build as { roof: number }).roof;
     expect(MAP_V1.roofs[roof]?.district).toBe(1);
     expect(MAP_V1.roofs[roof]?.size).not.toBe('small');
     expect(chooseRoof(state, 1)).toBe(roof);
     // 写字楼区有站之后不再列建站
-    must(state, list[0] as Parameters<typeof must>[1]);
+    must(state, build as Parameters<typeof must>[1]);
     expect(shoppingList(state, POLICIES.balanced).some((c) => c.type === 'buildStation')).toBe(false);
   });
 
@@ -176,18 +180,91 @@ describe('玩法：购物清单', () => {
   });
 });
 
+describe('玩法：大学城', () => {
+  /** 写字楼区开通并到三星、已经显示大学城，写字楼区有站：开通大学城之前的局面。 */
+  const readyForCampus = (): ReturnType<typeof quietState> => {
+    const state = withMoney(quietState());
+    const campaign = campaignOf(state);
+    campaign.districts[1]!.open = true;
+    campaign.districts[1]!.star = 3;
+    campaign.unlocks.showOffice = 0;
+    campaign.unlocks.showCampus = 0;
+    must(state, { type: 'buildStation', roof: OFFICE_ROOFS[0] as number });
+    return state;
+  };
+
+  it('写字楼区到三星、大学城显示之后，清单的第一项是开通大学城，开通之后是在大学城建第一座站，选址不选小屋顶', () => {
+    const state = readyForCampus();
+    expect(shoppingList(state, POLICIES.balanced)[0]).toEqual({ type: 'openDistrict', district: 2 });
+    must(state, { type: 'openDistrict', district: 2 });
+    const list = shoppingList(state, POLICIES.balanced);
+    expect(list[0]?.type).toBe('buildStation');
+    const roof = (list[0] as { roof: number }).roof;
+    expect(MAP_V1.roofs[roof]?.district).toBe(2);
+    expect(MAP_V1.roofs[roof]?.size).not.toBe('small');
+    expect(chooseRoof(state, 2)).toBe(roof);
+    must(state, list[0] as Parameters<typeof must>[1]);
+    expect(shoppingList(state, POLICIES.balanced).some((c) => c.type === 'buildStation' || c.type === 'openDistrict')).toBe(false);
+  });
+
+  it('大学城还没显示，或者写字楼区还没到三星时，清单里的开通大学城核心会拒绝，脚本跳过它去买别的', () => {
+    const state = readyForCampus();
+    campaignOf(state).unlocks.showCampus = -1;
+    const command = shoppingList(state, POLICIES.balanced)[0] as Parameters<typeof must>[1];
+    expect(command).toEqual({ type: 'openDistrict', district: 2 });
+    expect(quoteCommand(state, command).reason).toBe('districtHidden');
+    campaignOf(state).unlocks.showCampus = 0;
+    campaignOf(state).districts[1]!.star = 2;
+    expect(quoteCommand(state, command).reason).toBe('needStars');
+  });
+
+  it('只买飞机和只扩建一座站也开通大学城，但不在那里建站', () => {
+    for (const id of ['dronesOnly', 'singleStation'] as const) {
+      const state = readyForCampus();
+      const spec = POLICIES[id];
+      const list = shoppingList(state, spec);
+      expect(list[0], id).toEqual({ type: 'openDistrict', district: 2 });
+      must(state, list[0] as Parameters<typeof must>[1]);
+      expect(shoppingList(state, spec).some((c) => c.type === 'buildStation'), id).toBe(false);
+    }
+  });
+
+  it('不操作的玩法清单仍然是空的，不开通大学城', () => {
+    expect(shoppingList(readyForCampus(), POLICIES.idle)).toEqual([]);
+  });
+
+  it('「协同策略」：大学城建站之前是延迟支援，大学城建站之后换成全站协同，晚高峰那套的调度策略仍是时限优先', () => {
+    const state = readyForCampus();
+    must(state, { type: 'setRules', rules: { select: 'deadline' } });
+    const zones = (): string[] =>
+      ruleCommands(state, POLICIES.balanced)
+        .filter((c) => c.type === 'setRules' && (c.rules as { zone?: string }).zone !== undefined)
+        .map((c) => (c as { rules: { zone: string } }).rules.zone);
+    expect(zones()).toEqual(['hybrid', 'hybrid']); // 午晚两套
+    for (const c of ruleCommands(state, POLICIES.balanced)) must(state, c);
+    must(state, { type: 'openDistrict', district: 2 });
+    expect(zones()).toEqual([]); // 大学城开通了，但还没有站
+    must(state, { type: 'buildStation', roof: chooseRoof(state, 2) });
+    expect(zones()).toEqual(['global', 'global']);
+    for (const c of ruleCommands(state, POLICIES.balanced)) must(state, c);
+    expect(campaignOf(state).ruleSets?.evening).toMatchObject({ select: 'deadline', zone: 'global' });
+    expect(ruleCommands(state, POLICIES.balanced)).toEqual([]);
+    expect(ruleCommands(state, POLICIES.noCards)).toEqual([]);
+  });
+});
+
 describe('玩法：换卡', () => {
-  it('「先送哪张单」一栏没开放时不换，开放后换成快超时的先送，换好之后不再重复下命令', () => {
+  it('「调度策略」一栏没开放时不换，开放后换成时限优先，换好之后不再重复下命令', () => {
     const closed = quietState({}, false);
     expect(ruleCommands(closed, POLICIES.balanced)).toEqual([]);
     const state = quietState({}, false);
-    campaignOf(state).unlocks.selectColumn = 0; // 只开放「先送哪张单」一栏
+    campaignOf(state).unlocks.selectColumn = 0; // 只开放「调度策略」一栏
     expect(ruleCommands(state, POLICIES.balanced)).toEqual([{ type: 'setRules', rules: { select: 'deadline' } }]);
     must(state, { type: 'setRules', rules: { select: 'deadline' } });
     expect(ruleCommands(state, POLICIES.balanced)).toEqual([]);
   });
 
-  it('有两座以上的站，「别的站帮不帮」换成等 10 秒再帮', () => {
+  it('有两座以上的站，「协同策略」换成延迟支援', () => {
     const state = withMoney(quietState());
     must(state, { type: 'setRules', rules: { select: 'deadline' } });
     for (const d of campaignOf(state).districts) d.open = true;
@@ -195,7 +272,7 @@ describe('玩法：换卡', () => {
     expect(ruleCommands(state, POLICIES.balanced).some((c) => c.type === 'setRules' && (c.rules as { zone?: string }).zone === 'hybrid')).toBe(true);
   });
 
-  it('分成午晚两套之后各改各的：午高峰那套在「某一片的先送」开放后换成写字楼区的先送，晚高峰那套保持快超时的先送', () => {
+  it('分成午晚两套之后各改各的：午高峰那套在「{片区}优先」开放后换成写字楼区优先，晚高峰那套保持时限优先', () => {
     const state = withMoney(quietState());
     must(state, { type: 'setRules', rules: { select: 'deadline' } });
     const campaign = campaignOf(state);
@@ -215,7 +292,7 @@ describe('玩法：换卡', () => {
     expect(ruleCommands(state, POLICIES.noCards)).toEqual([]);
   });
 
-  it('所有玩法都只换「先送哪张单」和「别的站帮不帮」，换的卡都在经营模式的卡表里，不碰「一趟送几单」，也就不选「一趟送一单」', () => {
+  it('所有玩法都只换「调度策略」和「协同策略」，换的卡都在经营模式的卡表里，不碰「合单策略」，也就不选「单独配送」', () => {
     // 开放项全部打开，三个片区开通，建了第二座站，分成午晚两套：玩法能换的卡都摆出来了
     const make = (): ReturnType<typeof quietState> => {
       const state = withMoney(quietState());
@@ -244,7 +321,7 @@ describe('玩法：换卡', () => {
   it('一局里换卡的命令都成功：玩法下的每一条换卡命令核心都接受，没有一条被表外的卡拒绝', () => {
     const { record, state } = playGame('balanced', 42, { days: 8, startMoney: RICH });
     expect(record.cardChanges).toBeGreaterThan(0);
-    expect(state.stats.ruleChanges.every((c) => c.column !== 'pool')).toBe(true); // 玩家没有换过「一趟送几单」，买货箱时的自动换卡不记录
+    expect(state.stats.ruleChanges.every((c) => c.column !== 'pool')).toBe(true); // 玩家没有换过「合单策略」，买货箱时的自动换卡不记录
   });
 });
 
@@ -305,13 +382,14 @@ describe('一局：不操作', () => {
 });
 
 describe('一局：均衡', () => {
-  it('调度台开放后很快换成快超时的先送，第一次购买在第一天日结之后', () => {
+  it('调度台开放后很快换成时限优先，第一次购买在第一天日结之后', () => {
     const { record, state } = playGame('balanced', 42, { days: 3 });
     expect(record.nodes.selectOpen).not.toBeNull();
     expect(record.nodes.selectSet).not.toBeNull();
     expect(record.nodes.selectSet as number).toBeGreaterThanOrEqual(record.nodes.selectOpen as number);
     expect((record.nodes.selectSet as number) - (record.nodes.selectOpen as number)).toBeLessThanOrEqual(DECIDE_EVERY);
-    expect(state.rules.select).toBe('deadline');
+    // 写字楼区开通之后午高峰那套换成「写字楼区优先」，所以看第一次换卡
+    expect(state.stats.ruleChanges.find((c) => c.column === 'select')?.to).toBe('deadline');
     const first = record.purchases[0];
     expect(first?.step).toBeGreaterThan(DAY_STEPS); // 价签在第一次日结之后才开放
     expect(first?.step).toBeLessThanOrEqual(DAY_STEPS + 2 * DECIDE_EVERY);
@@ -338,7 +416,7 @@ describe('一局：均衡', () => {
     for (const d of record.daily) expect(d.lines.length).toBeGreaterThan(0); // 每天都有日结
   });
 
-  it('老街三星之后开通写字楼区，在写字楼区建第二座站，换成两套规矩，别的站帮不帮换成等 10 秒再帮', () => {
+  it('老街三星之后开通写字楼区，在写字楼区建第二座站，换成两套策略，协同策略换成延迟支援', () => {
     const { record, state } = playGame('balanced', 42, { days: 8 });
     const campaign = campaignOf(state);
     expect(record.nodes.officeOpened).not.toBeNull();
@@ -352,6 +430,30 @@ describe('一局：均衡', () => {
     expect(campaign.ruleSets?.noon.zone).toBe('hybrid');
     expect(campaign.ruleSets?.evening.zone).toBe('hybrid');
     expect(record.crossRiver).not.toBeNull();
+  });
+});
+
+describe('一局：均衡玩到大学城', () => {
+  it('写字楼区四星之后显示并开通大学城，在那里建站，之后「协同策略」是全站协同', () => {
+    const { record, state } = playGame('balanced', 42, { days: 30 });
+    const n = record.nodes;
+    expect(n.campusShown).not.toBeNull();
+    expect(n.campusOpened).not.toBeNull();
+    expect(n.campusOpened as number).toBeGreaterThanOrEqual(n.campusShown as number);
+    expect(n.campusShown as number).toBeGreaterThanOrEqual(n.office4 as number);
+    const built = record.purchases.filter((p) => p.type === 'buildStation').map((p) => (MAP_V1.roofs[p.target as number] as { district: number }).district);
+    expect(built).toContain(2);
+    expect(campaignOf(state).districts[2]?.open).toBe(true);
+    expect(state.rules.zone).toBe('global');
+    expect(campaignOf(state).ruleSets?.noon.zone).toBe('global');
+    expect(campaignOf(state).ruleSets?.evening.select).toBe('deadline');
+  });
+
+  it('全程不换卡的玩法同样开通大学城、在那里建站，策略卡仍是开局的', () => {
+    const { record, state } = playGame('noCards', 42, { days: 30 });
+    expect(record.nodes.campusOpened).not.toBeNull();
+    expect(record.cardChanges).toBe(0);
+    expect(state.rules).toMatchObject({ select: 'fifo', zone: 'global' });
   });
 });
 
@@ -373,7 +475,7 @@ describe('一局：只扩建一座站', () => {
 });
 
 describe('一局：全程不换卡', () => {
-  it('从不下换卡的命令：规矩卡一直是开局的，先送哪张单和别的站帮不帮始终不变（买了货箱时核心自动换一趟送几单，不算玩家换卡）', () => {
+  it('从不下换卡的命令：策略卡一直是开局的，调度策略和协同策略始终不变（买了货箱时核心自动换合单策略，不算玩家换卡）', () => {
     const { record, state } = playGame('noCards', 42, { days: 8, startMoney: RICH });
     expect(record.cardChanges).toBe(0);
     expect(record.nodes.selectSet).toBeNull();
@@ -382,12 +484,12 @@ describe('一局：全程不换卡', () => {
     expect(state.rules.zone).toBe('global');
     expect(campaignOf(state).ruleSets?.noon.select ?? 'fifo').toBe('fifo');
     expect(campaignOf(state).ruleSets?.evening.zone ?? 'global').toBe('global');
-    // 钱多时照样扩建：建了第二座站，两座站，别的站帮不帮仍是开局的卡
+    // 钱多时照样扩建：建了第二座站，两座站，协同策略仍是开局的卡
     expect(state.stations.length).toBeGreaterThanOrEqual(2);
     expect(record.purchases.length).toBeGreaterThan(10);
   });
 
-  it('每一天结束时的规矩都与开局的相同（只买飞机不买货箱的情形下三栏全都不变）', () => {
+  it('每一天结束时的策略都与开局的相同（只买飞机不买货箱的情形下三栏全都不变）', () => {
     const { state } = playGame('noCards', 43, { days: 3 });
     expect(state.rules).toEqual({ select: 'fifo', zone: 'global', pool: 'single' });
   });
@@ -431,10 +533,69 @@ describe('节点：从日结记录、解锁和购买记录里提取', () => {
     expect(n.officeOpened).toBe(record.purchases.find((p) => p.type === 'openDistrict')?.step);
   });
 
-  it('每个节点都有一个说明，主节点八个', () => {
-    expect(NODE_INFO.filter((i) => i.target !== null).map((i) => i.id)).toEqual(['firstPurchase', 'oldStreet2', 'oldStreet3', 'officeShown', 'secondStation', 'firstChoice', 'office3', 'campusShown']);
+  it('每个节点都有一个说明，主节点十二个，其中有目标的是前期的七个和结局，大学城的节点没有目标', () => {
+    expect(MAIN_NODES.length).toBe(12);
+    expect(NODE_INFO.filter((i) => i.target !== null).map((i) => i.id)).toEqual(['firstPurchase', 'oldStreet2', 'oldStreet3', 'officeShown', 'secondStation', 'firstChoice', 'office3', 'ending']);
+    expect(NODE_INFO.find((i) => i.id === 'ending')?.target).toEqual([120, 180]);
+    expect(NODE_INFO.slice(0, MAIN_NODES.length).map((i) => i.id)).toEqual([...MAIN_NODES]);
     const { record } = playGame('idle', 42, { days: 1 });
     expect(Object.keys(record.nodes).sort()).toEqual(NODE_INFO.map((i) => i.id).sort());
+  });
+
+  it('大学城的四个节点：开通是第一次开通片区 2，三星和四星在日结的那一步，结局是核心记下的那一步', () => {
+    const { record, state } = playGame('balanced', 42, { days: 30 });
+    const n = record.nodes;
+    expect(n.campusOpened).toBe(record.purchases.find((p) => p.type === 'openDistrict' && p.target === 2)?.step);
+    for (const id of ['campus3', 'campus4', 'oldStreet4', 'office4'] as const) {
+      const v = n[id];
+      if (v !== null) expect(v % DAY_STEPS, id).toBe(0);
+    }
+    const ending = campaignOf(state).ending;
+    expect(n.ending).toBe(ending === null ? null : ending.step);
+    if (n.ending !== null) {
+      // 三个片区都到过四星之后才有结局，大学城四星不晚于结局
+      expect(n.campus4 as number).toBeLessThanOrEqual(n.ending);
+      expect(n.office4 as number).toBeLessThanOrEqual(n.ending);
+      expect(n.oldStreet4 as number).toBeLessThanOrEqual(n.ending);
+    }
+  });
+});
+
+describe('高峰里各片区的订单：按下单时间落在午高峰或晚高峰的时段，按送往的片区数', () => {
+  it('每天两行三列，包括退单的订单，时段之外的订单不算，没开通的片区是 0', () => {
+    const { record, state } = playGame('balanced', 42, { days: 4 });
+    const peaks = record.peakOrders;
+    expect(peaks.noon.length).toBe(4);
+    expect(peaks.evening.length).toBe(4);
+    for (const row of [...peaks.noon, ...peaks.evening]) expect(row.length).toBe(3);
+    // 与逐张订单数出来的相同
+    const inNoon = state.orders.filter((o) => o.tOrder % DAY_STEPS >= NOON_WINDOW.start && o.tOrder % DAY_STEPS < NOON_WINDOW.end && Math.floor(o.tOrder / DAY_STEPS) < 4).length;
+    const inEvening = state.orders.filter((o) => o.tOrder % DAY_STEPS >= EVENING_WINDOW.start && o.tOrder % DAY_STEPS < EVENING_WINDOW.end && Math.floor(o.tOrder / DAY_STEPS) < 4).length;
+    expect(peaks.noon.flat().reduce((a, b) => a + b, 0)).toBe(inNoon);
+    expect(peaks.evening.flat().reduce((a, b) => a + b, 0)).toBe(inEvening);
+    expect(inNoon).toBeGreaterThan(0);
+    for (const row of [...peaks.noon, ...peaks.evening]) expect(row[2]).toBe(0); // 前四天大学城没开通
+    expect(peakOrdersOf(state, 4)).toEqual(peaks);
+  });
+
+  it('天数带小数时（玩到某一天的中途），最后不满一天的那天也数，不越界', () => {
+    const { record, state } = playGame('balanced', 42, { days: 1.3 });
+    expect(record.peakOrders.noon.length).toBe(2);
+    expect(record.peakOrders.evening.length).toBe(2);
+    const secondNoon = state.orders.filter((o) => Math.floor(o.tOrder / DAY_STEPS) === 1 && o.tOrder % DAY_STEPS >= NOON_WINDOW.start && o.tOrder % DAY_STEPS < NOON_WINDOW.end).length;
+    expect(secondNoon).toBeGreaterThan(0);
+    expect((record.peakOrders.noon[1] ?? []).reduce((a, b) => a + b, 0)).toBe(secondNoon);
+  });
+
+  it('时段的边界：午高峰是天内第 600 到 1499 步，晚高峰是第 2150 到 3099 步', () => {
+    const state = quietState();
+    const at = (tick: number): void => {
+      addOrder(state, { merchant: 0, building: 0, portion: 1, prepSteps: 10, tOrder: tick });
+    };
+    for (const tick of [599, 600, 1499, 1500, 2149, 2150, 3099, 3100]) at(tick);
+    const peaks = peakOrdersOf(state, 1);
+    expect(peaks.noon[0]).toEqual([2, 0, 0]);
+    expect(peaks.evening[0]).toEqual([2, 0, 0]);
   });
 });
 
@@ -445,7 +606,25 @@ describe('汇总', () => {
   const fake = (seed: number, nodes: Partial<Record<NodeId, number | null>>, extra: Partial<RunRecord> = {}): RunRecord => ({
     ...base,
     seed,
-    nodes: { ...base.nodes, firstPurchase: null, oldStreet2: null, oldStreet3: null, officeShown: null, secondStation: null, firstChoice: null, office3: null, campusShown: null, ...nodes },
+    nodes: {
+      ...base.nodes,
+      firstPurchase: null,
+      oldStreet2: null,
+      oldStreet3: null,
+      officeShown: null,
+      secondStation: null,
+      firstChoice: null,
+      office3: null,
+      campusShown: null,
+      campusOpened: null,
+      campus3: null,
+      campus4: null,
+      ending: null,
+      officeOpened: null,
+      oldStreet4: null,
+      office4: null,
+      ...nodes,
+    },
     ...extra,
   });
 
@@ -504,10 +683,145 @@ describe('汇总', () => {
     expect(f.bothThree.p25).toBe(48);
   });
 
+  it('结局：局内到达的局数、分位数，在 120、150、180 分钟之前到达的比例，没有到达的局当作无穷大', () => {
+    const m = (minutes: number): number => minutes * 600;
+    const long = { days: 40 };
+    const records = [fake(1, { ending: m(90) }, long), fake(2, { ending: m(126) }, long), fake(3, { ending: m(150) }, long), fake(4, { ending: m(186) }, long), fake(5, {}, long)];
+    const e = summarize(records, 't').policies[0]!.ending;
+    expect(e).toMatchObject({ runs: 5, reached: 4, p25: 126, p50: 150, p75: 186 });
+    expect(e.within120).toBe(0.2);
+    expect(e.within150).toBe(0.6);
+    expect(e.within180).toBe(0.6);
+    expect(summarize([fake(1, {}, long), fake(2, {}, long)], 't').policies[0]!.ending).toMatchObject({ reached: 0, p50: null, within180: 0 });
+  });
+
+  describe('各片区的订单占比', () => {
+    const days = 12;
+    const rows = (n: number[]): number[][] => Array.from({ length: days }, () => [...n]);
+    /** 写字楼区在第 2 天开通，大学城在第 5 天开通，结局在第 7 天的日结，全程 12 天。 */
+    const timeline = (): RunRecord => {
+      const noon = rows([0, 0, 0]);
+      const evening = rows([0, 0, 0]);
+      for (const d of [3, 4]) {
+        noon[d] = [10, 70, 20]; // 写字楼区开通之后，大学城开通之前
+        evening[d] = [60, 40, 0];
+      }
+      for (const d of [6, 7]) {
+        noon[d] = [20, 50, 30]; // 大学城开通之后，到结局那一天
+        evening[d] = [20, 20, 60];
+      }
+      for (const d of [8, 9, 10, 11]) {
+        noon[d] = [30, 40, 30]; // 结局之后
+        evening[d] = [40, 30, 30];
+      }
+      noon[5] = [99, 99, 99]; // 大学城开通那一天只有半天，不算
+      return fake(1, { officeOpened: 2 * DAY_STEPS + 100, campusOpened: 5 * DAY_STEPS + 1000, ending: 8 * DAY_STEPS }, { days, peakOrders: { noon, evening } });
+    };
+
+    it('三个时期各从一件事发生之后的第一个整天算起：开通那天、做日结的那天的前后都按定义划', () => {
+      const s = summarize([timeline()], 't').policies[0]!.shares;
+      expect(s.twoDistricts).toMatchObject({ runs: 1, days: 2, noon: [20, 140, 40], evening: [120, 80, 0] });
+      expect(s.campus).toMatchObject({ runs: 1, days: 2, noon: [40, 100, 60], evening: [40, 40, 120] });
+      expect(s.after).toMatchObject({ runs: 1, days: 4, noon: [120, 160, 120], evening: [160, 120, 120] });
+      // 每个（局、天）里单场高峰最大的片区占的比例
+      expect(s.campus.topNoon.p50).toBe(0.5);
+      expect(s.campus.topEvening.p50).toBe(0.6);
+      expect(s.twoDistricts.topNoon.p50).toBe(0.7);
+    });
+
+    it('没开通大学城的局，写字楼区开通之后一直算到局末，没有大学城时期和结局之后', () => {
+      const r = fake(1, { officeOpened: 2 * DAY_STEPS + 100 }, { days, peakOrders: { noon: rows([10, 30, 0]), evening: rows([10, 30, 0]) } });
+      const s = summarize([r], 't').policies[0]!.shares;
+      expect(s.twoDistricts).toMatchObject({ runs: 1, days: 9, noon: [90, 270, 0] });
+      expect(s.campus).toMatchObject({ runs: 0, days: 0 });
+      expect(s.after).toMatchObject({ runs: 0, days: 0 });
+    });
+
+    it('没到结局的局，大学城开通之后一直算到局末', () => {
+      const r = fake(1, { officeOpened: 2 * DAY_STEPS, campusOpened: 5 * DAY_STEPS + 1 }, { days, peakOrders: { noon: rows([10, 30, 20]), evening: rows([10, 30, 20]) } });
+      expect(summarize([r], 't').policies[0]!.shares.campus.days).toBe(6); // 第 6 天到第 11 天
+    });
+  });
+
+  describe('校准目标的核对', () => {
+    const m = (minutes: number): number => minutes * 600;
+    const long = { days: 40 };
+    const ok = (id: 'balanced' | 'singleStation' | 'noCards' | 'dronesOnly' | 'idle', ending: number | null, extra: Partial<RunRecord> = {}): RunRecord => ({
+      ...fake(1, ending === null ? {} : { ending: m(ending) }, { ...long, policy: id, maxSaving: DAY_STEPS, ...extra }),
+    });
+    const by = (checks: ReturnType<typeof goalChecks>, text: string): { goal: string; value: string; pass: boolean } => {
+      const found = checks.find((c) => c.goal.includes(text));
+      if (found === undefined) throw new Error(`no check for ${text}`);
+      return found;
+    };
+
+    it('目标写在 GOALS 里：结局 120 到 180 分钟，均衡玩法 4 小时内到达的不低于九成，四种不需要判断的玩法在 180 分钟内到达的不超过两成，攒钱不超过两个游戏日，第一天升二星不低于八成，四星的线不超过 90%', () => {
+      expect(GOALS.endingMinutes).toEqual([120, 180]);
+      expect([GOALS.endingWithin, GOALS.endingShare, GOALS.weakWithin, GOALS.weakShare, GOALS.savingDays, GOALS.dayOneStar2, GOALS.fourStarLine]).toEqual([240, 0.9, 180, 0.2, 2, 0.8, 90]);
+      expect(WEAK_POLICIES).toEqual(['singleStation', 'noCards', 'dronesOnly', 'idle']);
+    });
+
+    it('均衡玩法 4 小时内到达结局的比例和第一天升二星的比例：各写一行，不够时标为没有达到', () => {
+      const good = Array.from({ length: 10 }, (_, i) => ok('balanced', i === 9 ? null : 150, { nodes: { ...fake(1, { ending: i === 9 ? null : m(150), oldStreet2: DAY_STEPS }).nodes } }));
+      const c = goalChecks(summarize(good, 't'));
+      expect(by(c, '240 分钟内到达结局').value).toBe('90%');
+      expect(by(c, '240 分钟内到达结局').pass).toBe(true);
+      expect(by(c, '第一天升到二星').value).toBe('100%');
+      expect(by(c, '第一天升到二星').pass).toBe(true);
+      const late = Array.from({ length: 10 }, (_, i) => ok('balanced', i < 2 ? null : 150, { nodes: { ...fake(1, { ending: i < 2 ? null : m(150), oldStreet2: i < 3 ? 2 * DAY_STEPS : DAY_STEPS }).nodes } }));
+      const d = goalChecks(summarize(late, 't'));
+      expect(by(d, '240 分钟内到达结局').pass).toBe(false);
+      expect(by(d, '240 分钟内到达结局').value).toBe('80%');
+      expect(by(d, '第一天升到二星').pass).toBe(false);
+      expect(by(d, '第一天升到二星').value).toBe('70%');
+    });
+
+    it('四星的准时率线不超过 90%：读内容表里的数', () => {
+      const four = STARS_V1.rules.find((r) => r.star === 4)?.onTimeMin as number;
+      const checks = goalChecks(summarize([ok('balanced', 150)], 't'));
+      expect(by(checks, '四星的准时率线').value).toBe(`${four}%`);
+      expect(by(checks, '四星的准时率线').pass).toBe(four <= 90);
+    });
+
+    it('均衡玩法的结局中位数和四分位，四种玩法的比例，攒钱时间：达到和没达到各写一行', () => {
+      const good = [ok('balanced', 130), ok('balanced', 150), ok('balanced', 170), ok('noCards', null), ok('singleStation', null), ok('dronesOnly', null), ok('idle', null)];
+      const c = goalChecks(summarize(good, 't'));
+      expect(by(c, '均衡玩法的结局中位数').pass).toBe(true);
+      expect(by(c, '均衡玩法的结局四分位').pass).toBe(true);
+      expect(by(c, '全程不换卡在 180 分钟内').pass).toBe(true);
+      expect(by(c, '全程不换卡的每一次购买').pass).toBe(true);
+      const bad = [ok('balanced', 90), ok('balanced', 100), ok('balanced', 190), ok('noCards', 150), ok('noCards', 160), ok('noCards', 170), ok('noCards', null), ok('noCards', null)];
+      const d = goalChecks(summarize(bad, 't'));
+      expect(by(d, '均衡玩法的结局中位数').pass).toBe(false);
+      expect(by(d, '均衡玩法的结局四分位').pass).toBe(false);
+      expect(by(d, '全程不换卡在 180 分钟内').pass).toBe(false);
+      expect(by(d, '全程不换卡在 180 分钟内').value).toBe('60%');
+      const slow = goalChecks(summarize([ok('balanced', 150, { maxSaving: 3 * DAY_STEPS })], 't'));
+      expect(by(slow, '均衡的每一次购买').pass).toBe(false);
+    });
+
+    it('订单占比：大学城开通之后午高峰主要是写字楼区的订单，晚高峰主要是老街和大学城的订单，写出各占多少和最大的是哪个片区', () => {
+      const days = 30;
+      const make = (noon: number[], evening: number[]): RunRecord =>
+        ok('balanced', 150, {
+          days,
+          peakOrders: { noon: Array.from({ length: days }, () => [...noon]), evening: Array.from({ length: days }, () => [...evening]) },
+          nodes: { ...fake(1, { officeOpened: DAY_STEPS, campusOpened: 2 * DAY_STEPS, ending: 150 * 600 }).nodes },
+        });
+      const fine = by(goalChecks(summarize([make([20, 50, 30], [20, 25, 55])], 't')), '午高峰主要是写字楼区');
+      expect(fine.pass).toBe(true);
+      expect(fine.value).toContain('午高峰写字楼区 50%（最大的片区 写字楼区）');
+      expect(fine.value).toContain('晚高峰老街加大学城 75%（最大的片区 大学城）');
+      // 午高峰里写字楼区不到一半，或者晚高峰里写字楼区占了一半以上，都不算
+      expect(by(goalChecks(summarize([make([30, 40, 30], [20, 25, 55])], 't')), '午高峰主要是写字楼区').pass).toBe(false);
+      expect(by(goalChecks(summarize([make([20, 60, 20], [10, 60, 30])], 't')), '午高峰主要是写字楼区').pass).toBe(false);
+    });
+  });
+
   it('Markdown 汇总包含全部章节和各玩法的名称', () => {
     const records = POLICY_IDS.flatMap((id) => [playGame(id, 42, { days: 2 }).record, playGame(id, 43, { days: 2 }).record]);
     const text = renderMarkdown(summarize(records, '测试'));
-    for (const heading of ['## 一 节点的时间', '## 二 均衡玩法对照目标', '## 三', '## 四 写字楼区的过河单', '## 五 攒钱时间', '## 六', '## 七']) expect(text).toContain(heading);
+    for (const heading of ['## 一 节点的时间', '## 二 均衡玩法对照目标', '## 三', '## 四 写字楼区的过河单', '## 五 攒钱时间', '## 六', '## 七', '## 八 结局', '## 九 各片区在两场高峰里的订单占比', '## 十 校准目标的核对']) expect(text).toContain(heading);
     for (const id of POLICY_IDS) expect(text).toContain(POLICIES[id].name);
     expect(text).not.toContain('NaN');
     expect(text).not.toContain('undefined');
@@ -600,6 +914,28 @@ describe('命令行：小规模的端到端', () => {
     }
   });
 
+  it('--select-cards：午晚两套的「调度策略」按给的卡选，与进程内运行的结果相同，写进运行信息，不认识的卡在运行前就报错', () => {
+    const out = join(ROOT, 'out', `test-autoplay-cards-${process.pid}`);
+    try {
+      const args = ['--out', out, '--policies', 'balanced', '--seeds', '42', '--days', '8', '--workers', '1', '--quiet'];
+      const ok = run([...args, '--select-cards', 'prioOffice,prioOld']);
+      expect(ok.stderr).toBe('');
+      expect(ok.status).toBe(0);
+      const [rec] = parseRunsJsonl(readFileSync(join(out, 'runs.jsonl'), 'utf8'));
+      expect(rec?.hash).toBe(playGame('balanced', 42, { days: 8, selectCards: { noon: 'prioOffice', evening: 'prioOld' } }).record.hash);
+      expect(rec?.hash).not.toBe(playGame('balanced', 42, { days: 8 }).record.hash);
+      const info = JSON.parse(readFileSync(join(out, 'run_info.json'), 'utf8')) as { settings: { selectCards: unknown } };
+      expect(info.settings.selectCards).toEqual({ noon: 'prioOffice', evening: 'prioOld' });
+      expect(run([...args, '--select-cards', 'nope,deadline']).status).not.toBe(0);
+      expect(run([...args, '--select-cards', 'deadline']).status).not.toBe(0);
+      expect(run(args).status).toBe(0);
+      const plain = JSON.parse(readFileSync(join(out, 'run_info.json'), 'utf8')) as { settings: { selectCards: unknown } };
+      expect(plain.settings.selectCards).toBeNull();
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
   it('补丁对核心里加载时算出的东西也起作用：改订单量曲线，来单数就不同', () => {
     const out = join(ROOT, 'out', `test-autoplay-curve-${process.pid}`);
     try {
@@ -615,6 +951,31 @@ describe('命令行：小规模的端到端', () => {
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
+  });
+});
+
+describe('小结的对照：只加记录，不改变自动玩家的决定', () => {
+  it('同一局，要对照和不要对照，节点、购买、每天的记录、局末状态逐项相同，只多一个 shadow 字段', () => {
+    for (const id of ['balanced', 'noCards', 'singleStation'] as const) {
+      const plain = playGame(id, 42, { days: 6 }).record;
+      const shadowed = playGame(id, 42, { days: 6, shadow: true }).record;
+      const { shadow, hash: shadowHash, ...rest } = shadowed;
+      const { hash: plainHash, ...restPlain } = plain;
+      expect(plain.shadow, id).toBeUndefined();
+      expect(rest, id).toEqual(restPlain);
+      expect(shadow?.gains, id).toHaveLength(12); // 6 个游戏日，每天两场高峰
+      // 记录里补进了对照的话，状态哈希里有它
+      if ((shadow?.compared ?? 0) > 0) expect(shadowHash, id).not.toBe(plainHash);
+      else expect(shadowHash, id).toBe(plainHash);
+    }
+  });
+
+  it('全程不换卡的玩法整场用的都是开局的卡，没有对照；换卡的玩法有对照，多准时的总数是各场之和', () => {
+    const none = playGame('noCards', 42, { days: 6, shadow: true }).record.shadow;
+    expect(none).toEqual({ compared: 0, total: 0, gains: Array.from({ length: 12 }, () => null) });
+    const some = playGame('balanced', 42, { days: 6, shadow: true }).record.shadow;
+    expect(some?.compared).toBeGreaterThan(6);
+    expect(some?.total).toBe((some?.gains ?? []).reduce<number>((sum, g) => sum + (g ?? 0), 0));
   });
 });
 

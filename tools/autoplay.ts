@@ -1,5 +1,6 @@
 // 自动购买脚本的命令行：把全部（玩法 × 订单种子）分给最多 16 个工作线程并行运行，
 // 写出每局的原始数据（runs.jsonl，一局一行）、节点时间表（nodes.csv）、汇总表（summary.md 和 summary.json）和运行信息（run_info.json）。
+// 汇总表包含结局的时间和到达比例、各片区在两场高峰里的订单占比，以及按校准目标逐条核对的结果。
 // 一局怎么玩见 autoplay-lib.ts 开头的说明，汇总的口径见 autoplay-summary.ts。
 // 用法：npm run autoplay -- [--policies 列表] [--seeds 42-91] [--days 16] [--workers 16] [--out 目录] [--label 名称]
 //       npm run autoplay -- --resummarize 目录     不重跑，用目录里的 runs.jsonl 重写汇总表
@@ -13,9 +14,10 @@ import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import { PATCH_ENV, PATCH_TABLES, applyPatch } from './autoplay-patch.ts';
 import { CONTENT_VERSION } from '../src/core/index.ts';
 import { CLICK_DELAY, DECIDE_EVERY, DEFAULT_DAYS, NODE_INFO, POLICIES, POLICY_IDS, playGame, stepsToMinutes } from './autoplay-lib.ts';
-import type { PolicyId, RunRecord } from './autoplay-lib.ts';
+import type { PolicyId, RunRecord, SelectCards } from './autoplay-lib.ts';
 import { renderMarkdown, summarize } from './autoplay-summary.ts';
 import { jsonReplacer, parseSeeds } from './headless-lib.ts';
+import { CAMPAIGN_RULES_V1 } from '../src/content/rules_v1.ts';
 
 export const MAX_WORKERS = 16; // 工作线程最多 16 个，不按核数无限开
 export const DEFAULT_SEEDS = '42-91'; // 50 个订单种子
@@ -26,6 +28,8 @@ export interface Task {
   seed: number;
   days: number;
   clickDelay: number;
+  shadow?: boolean;
+  selectCards?: SelectCards;
 }
 
 // ---- 线程池 ----
@@ -43,7 +47,12 @@ function workerMain(): void {
   if (!port) return;
   port.on('message', (request: Request) => {
     try {
-      const { record } = playGame(request.task.policy, request.task.seed, { days: request.task.days, clickDelay: request.task.clickDelay });
+      const { record } = playGame(request.task.policy, request.task.seed, {
+        days: request.task.days,
+        clickDelay: request.task.clickDelay,
+        shadow: request.task.shadow === true,
+        ...(request.task.selectCards === undefined ? {} : { selectCards: request.task.selectCards }),
+      });
       const reply: Reply = { runId: request.runId, id: request.id, ok: true, record };
       port.postMessage(reply);
     } catch (error) {
@@ -182,7 +191,9 @@ const OPTIONS = {
   out: { type: 'string' },
   label: { type: 'string' },
   'click-delay': { type: 'string' },
+  'select-cards': { type: 'string' },
   patch: { type: 'string' },
+  shadow: { type: 'boolean' },
   resummarize: { type: 'string' },
   quiet: { type: 'boolean' },
   help: { type: 'boolean' },
@@ -192,13 +203,16 @@ const HELP = `用法：npm run autoplay -- [选项]
 
   --policies <列表>   玩法，逗号分隔，默认全部：${POLICY_IDS.join(',')}
   --seeds <列表>      订单种子，如 42-91 或 42,43（默认 ${DEFAULT_SEEDS}，50 个）
-  --days <n>          每局的游戏日数（默认 ${DEFAULT_DAYS}，设计要求至少 12）
+  --days <n>          每局的游戏日数（默认 ${DEFAULT_DAYS}，一倍速 ${DEFAULT_DAYS * 6} 分钟，足够看清结局）
   --workers <n>       工作线程数，最多 ${MAX_WORKERS}（默认 ${MAX_WORKERS}，不超过机器的核数）
   --out <目录>        输出目录（默认 out/autoplay/latest）
   --label <名称>      汇总表的标题（默认取目录名）
   --click-delay <步>  开局订单出现之后脚本隔多少步点击（默认 ${CLICK_DELAY}，即 1 秒）
+  --select-cards <午,晚>  午晚两套策略里「调度策略」各选哪张卡，如 prioOffice,deadline。比较换卡的价值用。
+                      卡没开放时先用 deadline。只对会换卡的玩法起作用
   --patch <文件或 JSON>  试数值：把一份补丁合并进内容表再运行，不改任何文件，补丁会记进 run_info.json。
                       写法见 tools/autoplay-patch.ts，例如 '{"economy":{"districtOpenPrice":[0,300,1600]}}'
+  --shadow            每场高峰同时按开局的卡算对照，每局的记录多一个 shadow 字段（每场比开局的卡多准时的单数）。不改变游戏和节点时间
   --resummarize <目录>  不重跑，读目录里的 runs.jsonl，重写 nodes.csv、summary.md 和 summary.json
   --quiet             不打印汇总表
   --help              显示本说明
@@ -212,6 +226,15 @@ function toInt(name: string, text: string | undefined, fallback: number, min: nu
   const n = Number(text);
   if (text.trim() === '' || !Number.isInteger(n) || n < min) throw new RangeError(`--${name} must be an integer >= ${min}, got "${text}"`);
   return n;
+}
+
+/** --select-cards 的值：两张卡，逗号分隔，先午后晚。 */
+function parseSelectCards(text: string | undefined): SelectCards | undefined {
+  if (text === undefined) return undefined;
+  const parts = text.split(',').map((s) => s.trim());
+  const known = CAMPAIGN_RULES_V1.select;
+  if (parts.length !== 2 || parts.some((id) => !known.includes(id))) throw new RangeError(`--select-cards needs two cards from ${known.join(', ')}, got "${text}"`);
+  return { noon: parts[0] as string, evening: parts[1] as string };
 }
 
 function parsePolicies(text: string | undefined): PolicyId[] {
@@ -262,6 +285,7 @@ async function main(): Promise<void> {
   const seeds = parseSeeds(values.seeds ?? DEFAULT_SEEDS);
   const days = toInt('days', values.days, DEFAULT_DAYS, 1);
   const clickDelay = toInt('click-delay', values['click-delay'], CLICK_DELAY, 0);
+  const selectCards = parseSelectCards(values['select-cards']);
   const workers = Math.min(toInt('workers', values.workers, MAX_WORKERS, 1), MAX_WORKERS, Math.max(1, cpus().length));
   const out = (values.out ?? DEFAULT_OUT).replace(/\/+$/, '');
   const patch = loadPatch(values.patch);
@@ -272,7 +296,8 @@ async function main(): Promise<void> {
   mkdirSync(out, { recursive: true });
 
   const tasks: Task[] = [];
-  for (const policy of policies) for (const seed of seeds) tasks.push({ policy, seed, days, clickDelay });
+  const shadow = values.shadow === true;
+  for (const policy of policies) for (const seed of seeds) tasks.push({ policy, seed, days, clickDelay, shadow, ...(selectCards === undefined ? {} : { selectCards }) });
   const t0 = performance.now();
   const startedAt = new Date();
   const log = (message: string): void => {
@@ -308,7 +333,7 @@ async function main(): Promise<void> {
     contentVersion: CONTENT_VERSION,
     patch, // 试数值的补丁，没有时为 null：有补丁时这批数据对应的内容表不是仓库里的那一份
     workers,
-    settings: { policies, seeds, days, clickDelay, decideEvery: DECIDE_EVERY },
+    settings: { policies, seeds, days, clickDelay, decideEvery: DECIDE_EVERY, shadow, selectCards: selectCards ?? null },
     runs: records.length,
     wallSeconds: Math.round(wallMs) / 1000,
     files: {

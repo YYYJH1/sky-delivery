@@ -33,3 +33,23 @@ export function peakWindow(day: number, peak: PeakName): { start: number; end: n
 export function summaryStep(day: number, peak: PeakName): number {
   return peakWindow(day, peak).end + SUMMARY_DELAY;
 }
+
+/** 这一步是某场高峰下单时段的第一步时，返回这场高峰，其余为 null。 */
+export function peakStartingAt(step: number): PeakName | null {
+  const tick = step % DAY_STEPS;
+  if (tick === NOON_WINDOW.start) return 'noon';
+  if (tick === EVENING_WINDOW.start) return 'evening';
+  return null;
+}
+
+/**
+ * 这一步落在哪场高峰里，从下单时段的第一步到生成小结的那一步之前。
+ * 下单时段结束之后还有 30 秒，这时这一场的订单还在陆续有结果，所以也算在内。不在任何一场里为 null。
+ */
+export function peakInProgress(step: number): PeakName | null {
+  const day = dayOf(step);
+  for (const peak of ['noon', 'evening'] as const) {
+    if (step >= peakWindow(day, peak).start && step < summaryStep(day, peak)) return peak;
+  }
+  return null;
+}

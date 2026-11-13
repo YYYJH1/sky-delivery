@@ -50,7 +50,7 @@ describe('价签和改装：开放之前不显示', () => {
     expect(applyCommand(state, { type: 'buyBay', station: 0 })).toEqual({ ok: false, reason: 'priceTagsLocked' });
   });
 
-  it('就近降落仍按「要有第二座站」显示，不另加开放条件：只有一座站时是 locked', () => {
+  it('就近降落仍按「需要先建成第二个站点」显示，不另加开放条件：只有一座站时是 locked', () => {
     const state = campaignState();
     unlock(state, 'priceTags');
     expect(data(state).nearbyLanding.note).toBe('locked');

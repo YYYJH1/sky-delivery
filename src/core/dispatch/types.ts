@@ -13,14 +13,14 @@ export interface DispatchContext {
   tripTime(): readonly number[];
 }
 
-/** 先送哪张单。 */
+/** 调度策略。 */
 export interface SelectRule {
   id: string;
   /** 返回 ctx.pendingIds 的下标，从最先送的排到最后送的。必须包含全部下标 */
   rank(ctx: DispatchContext): number[];
 }
 
-/** 别的站帮不帮。 */
+/** 协同策略。 */
 export interface ZoneRule {
   id: string;
   /**
@@ -30,7 +30,7 @@ export interface ZoneRule {
   allows(state: SimState, now: number, drone: Pick<Drone, 'station'>, order: Order): boolean;
 }
 
-/** 一趟送几单。 */
+/** 合单策略。 */
 export interface PoolRule {
   id: string;
   /**

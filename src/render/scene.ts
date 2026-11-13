@@ -120,7 +120,7 @@ export interface TicketSlot {
 
 /**
  * 一张票杆上 n 张小票挂在哪：以票杆中心为中心，两张时间隔大一点。
- * unit 是小票的放大倍数（整张地图放进窗口时小票要放大才看得清），小票之间的间隔跟着放大。
+ * unit 是小票的放大倍数（镜头缩放比 1 小时小票要放大才看得清），小票之间的间隔跟着放大。
  */
 export function ticketSlots(front: ShopFront, n: number, unit = 1): TicketSlot[] {
   const uc = front.awningStart + front.awningWidth / 2;
@@ -173,6 +173,24 @@ export function placeTickets(front: ShopFront, shown: readonly WaitingTicket[], 
       tilt: slot.tilt,
     };
   });
+}
+
+/**
+ * 一家店的门面和小票占着的深度：从街边起，雨棚 7，票杆在 13，小票挂下去约 36，再留一点。unit 是小票的放大倍数，
+ * 小票放大之后挂得更深，深度也跟着长。
+ */
+export function frontDepth(unit = 1): number {
+  return 46 + 26 * (unit - 1);
+}
+
+/** 一家店的门面和小票占着的地方：票杆两端各多算 6，深度见 frontDepth，世界坐标里的外接框。 */
+export function frontZone(front: ShopFront, unit = 1): Rect {
+  const [r0, r1] = railEnds(front, unit);
+  const depth = frontDepth(unit);
+  const corners = [frontPoint(front, r0 - 6, 0), frontPoint(front, r1 + 6, 0), frontPoint(front, r0 - 6, depth), frontPoint(front, r1 + 6, depth)];
+  const x0 = Math.min(...corners.map((p) => p.x));
+  const y0 = Math.min(...corners.map((p) => p.y));
+  return { x: x0, y: y0, w: Math.max(...corners.map((p) => p.x)) - x0, h: Math.max(...corners.map((p) => p.y)) - y0 };
 }
 
 /** 门面局部坐标 (u, v) 换成世界坐标：局部 +u 沿街边，+v 朝街里，整体转 front.angle 度。 */
@@ -235,9 +253,9 @@ export function occupiesBay(d: Pick<Drone, 'state'>): boolean {
   return d.state === DroneState.Dock || d.state === DroneState.TakeoffQueue || d.state === DroneState.Takeoff || d.state === DroneState.Land;
 }
 
-/** 停机位在屋顶里的位置（世界坐标）。roof 是屋顶的左上角。 */
-export function slotWorldPositions(roofX: number, roofY: number, roofW: number, roofH: number, bays: number): Vec[] {
-  return bayPositions(roofW, roofH, bays).map((p) => ({ x: roofX + p.x, y: roofY + p.y }));
+/** 停机位在屋顶里的位置（世界坐标）。roof 是屋顶的左上角，limit 是屋顶最多放几个停机位，含义见 bayPositions。 */
+export function slotWorldPositions(roofX: number, roofY: number, roofW: number, roofH: number, bays: number, limit = bays): Vec[] {
+  return bayPositions(roofW, roofH, bays, limit).map((p) => ({ x: roofX + p.x, y: roofY + p.y }));
 }
 
 // ---- 等降落的飞机 ----

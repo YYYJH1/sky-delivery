@@ -5,14 +5,14 @@ import { campaignOf, campaignState, clickOpening, must, roofWhere, unlockAll } f
 import { CITY, OPENING } from './helpers.ts';
 
 const CASES: [string, ConfigOverrides][] = [
-  ['三片区 快超时 哪座站都能送', CITY],
-  ['三片区 先下单 只由最近的站送', { ...CITY, rules: { select: 'fifo', zone: 'strict' } }],
+  ['三片区 快超时 全站协同', CITY],
+  ['三片区 先到先送 仅限最近站点', { ...CITY, rules: { select: 'fifo', zone: 'strict' } }],
   ['老街开局', OPENING],
-  ['三片区 来回快 等 10 秒再帮 顺路的一起送 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'roundtrip', zone: 'hybrid', pool: 'any' } }],
-  ['三片区 老街的先送 只由最近的站送 同一家店的一起送 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'prioOld', zone: 'strict', pool: 'same' } }],
-  ['老街开局 顺路的一起送 载量 2', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { pool: 'any' } }],
-  ['三片区 写字楼区的先送 哪座站都能送 顺路的一起送 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'prioOffice', zone: 'global', pool: 'any' } }],
-  ['三片区 大学城的先送 等 10 秒再帮 同一家店的一起送 载量 3', { ...CITY, peakRate: 82, capacity: 3, rules: { select: 'prioCampus', zone: 'hybrid', pool: 'same' } }],
+  ['三片区 短程优先 延迟支援 顺路合并 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'roundtrip', zone: 'hybrid', pool: 'any' } }],
+  ['三片区 老街优先 仅限最近站点 同店合并 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'prioOld', zone: 'strict', pool: 'same' } }],
+  ['老街开局 顺路合并 载量 2', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { pool: 'any' } }],
+  ['三片区 写字楼区优先 全站协同 顺路合并 载量 2', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'prioOffice', zone: 'global', pool: 'any' } }],
+  ['三片区 大学城优先 延迟支援 同店合并 载量 3', { ...CITY, peakRate: 82, capacity: 3, rules: { select: 'prioCampus', zone: 'hybrid', pool: 'same' } }],
 ];
 
 describe('确定性', () => {
@@ -136,7 +136,7 @@ function missedFields(state: SimState, sections: readonly (keyof SimState)[]): s
 
 describe('状态哈希的覆盖', () => {
   it('改动飞机、订单、站点、统计、规则、随机数状态里的任何一个字段，哈希都会变', () => {
-    // 老街开局运行到午高峰中途，换过一次规矩：有已完成、进行中和排队的订单，有提前派出的记录和换卡记录
+    // 老街开局运行到午高峰中途，换过一次策略：有已完成、进行中和排队的订单，有提前派出的记录和换卡记录
     const state = createState({ ...OPENING, seed: 46 });
     advance(state, 800);
     setRules(state, { select: 'deadline' });
@@ -185,7 +185,7 @@ describe('状态哈希的覆盖：配置', () => {
 // ---- 经营模式的状态 ----
 /**
  * 一个内容丰富的经营模式状态：开局结束，三个片区开通，建过站又退回，买过飞机和停机位并退回一部分，买了双层货箱和就近降落，
- * 分成了午晚两套规矩，跨过一次日结，生成过两场高峰小结，有便签。
+ * 分成了午晚两套策略，跨过一次日结，生成过两场高峰小结，有便签。
  */
 function richCampaign(): SimState {
   const state = unlockAll(campaignState({ seed: 46 }));
@@ -234,7 +234,7 @@ describe('状态哈希的覆盖：经营模式', () => {
     expect(campaign.districts.every((d) => d.open)).toBe(true);
     expect(campaign.opening.orders.length).toBe(5);
     expect(campaign.opening.done).toBe(true);
-    // 两套规矩、日结和小结的记录、便签
+    // 两套策略、日结和小结的记录、便签
     expect(campaign.ruleSets).not.toBeNull();
     expect(campaign.days.length).toBe(1);
     expect(campaign.peaks.length).toBe(2);

@@ -1,13 +1,13 @@
 {
   "name": "sky-delivery-game",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "typecheck": "tsc -p tsconfig.core.json && tsc -p tsconfig.node.json && tsc -p tsconfig.save.json && tsc -p tsconfig.app.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.render.json",
+    "typecheck": "tsc -p src/core/tsconfig.json && tsc -p tsconfig.node.json && tsc -p src/save/tsconfig.json && tsc -p src/app/tsconfig.json && tsc -p src/ui/tsconfig.json && tsc -p src/render/tsconfig.json",
     "test": "vitest run",
     "headless": "node --disable-warning=ExperimentalWarning tools/headless.ts",
     "campaign": "node --disable-warning=ExperimentalWarning tools/campaign.ts",

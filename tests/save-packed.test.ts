@@ -125,7 +125,7 @@ describe('存储里的写法：压缩的和没压缩的', () => {
 
 describe('压缩的存档被改坏：回退到备份，原样留一份副本', () => {
   /** 备好三代压缩的存档，把主存档改成 bad，读档，检查回退和副本。 */
-  async function expectFallback(bad: (good: string) => string | Promise<string>, code: FailureCode, why: string): Promise<void> {
+  async function expectFallback(bad: (good: string) => string | Promise<string>, code: FailureCode | readonly FailureCode[], why: string): Promise<void> {
     const store = new MemoryStore();
     const { hashes } = await threeGenerations(store);
     const good = await readStored(store, 'main');
@@ -141,7 +141,7 @@ describe('压缩的存档被改坏：回退到备份，原样留一份副本', (
     expect(loaded.state && hashState(loaded.state), why).toBe(hashes[1]);
     const failed = loaded.failures[0];
     expect(failed?.kind, why).toBe('invalid');
-    if (failed?.kind === 'invalid') expect(failed.reason.code, why).toBe(code);
+    if (failed?.kind === 'invalid') expect(typeof code === 'string' ? [code] : code, why).toContain(failed.reason.code);
     // 坏的存档原样留着，副本也是原样
     expect(await store.get(slotKey('main')), why).toBe(text);
     expect(loaded.quarantined, why).toHaveLength(1);
@@ -159,7 +159,8 @@ describe('压缩的存档被改坏：回退到备份，原样留一份副本', (
   });
 
   it('数据里少了一段：类型是 checksum 或 code', async () => {
-    await expectFallback((good) => good.slice(0, PACKED_PREFIX.length + 50) + good.slice(PACKED_PREFIX.length + 80), 'checksum', 'dropped middle');
+    // 少掉 30 个字符之后，数据的长度除以 4 的余数随存档内容变化，余数是 1 时不是合法的编码，先在编码这一步失败
+    await expectFallback((good) => good.slice(0, PACKED_PREFIX.length + 50) + good.slice(PACKED_PREFIX.length + 80), ['checksum', 'code'], 'dropped middle');
   });
 
   it('末尾被截断：只剩前缀和一部分数据，类型是 code', async () => {

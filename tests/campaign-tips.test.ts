@@ -1,4 +1,4 @@
-// 引导便签的七个时机、结局，以及经营模式状态的确定性：每一步的状态哈希相同，哈希覆盖口碑、解锁、规矩、日结和小结、便签、结局的字段，存读档前后一致。
+// 引导便签的七个时机、结局，以及经营模式状态的确定性：每一步的状态哈希相同，哈希覆盖口碑、解锁、策略、日结和小结、便签、结局的字段，存读档前后一致。
 import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import {
@@ -32,7 +32,7 @@ describe('便签：七个时机，每条最多出现一次', () => {
     expect(TIP_IDS).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay', 'gateBusy', 'openOffice']);
   });
 
-  it('开局没有便签；游戏开始、第一张订单出现的那一步放出「点一下这张单」，出现的步是 0', () => {
+  it('开局没有便签；游戏开始、第一张订单出现的那一步放出「点击订单，派出一架无人机」，出现的步是 0', () => {
     const state = campaignState({ seed: 42 });
     expect(campaignOf(state).tips).toEqual([]);
     step(state);
@@ -133,7 +133,7 @@ describe('便签：七个时机，每条最多出现一次', () => {
     }
   });
 
-  it('一局里七条便签各出现一次：开局点单，加停机位和飞机，换成「快超时的先送」，某场高峰上空有飞机排队，老街到三星', () => {
+  it('一局里七条便签各出现一次：开局点单，新增停机位和购买无人机，换成「时限优先」，某场高峰上空有无人机排队，老街到三星', () => {
     const state = campaignState({ seed: 42 });
     const campaign = campaignOf(state);
     for (let i = 0; i < 3 * DAY_STEPS + 1; i++) {
@@ -165,7 +165,10 @@ describe('便签：七个时机，每条最多出现一次', () => {
     expect(at('canAddBay')).toBe(DAY_STEPS);
     expect(at('gateBusy')).toBe(5400);
     expect(tips.find((t) => t.id === 'gateBusy')?.station).toBe(0);
-    expect(at('openOffice')).toBe(3 * DAY_STEPS);
+    // 老街到三星的那次日结放出「写字楼区已可开通」：订单少的开局，第二天的日结时老街就到了三星，脚本在第三天强制三星只是兜底
+    const reachedThree = campaign.days.find((d) => (d.districts[0] as { star: number }).star >= 3);
+    expect(reachedThree).toBeDefined();
+    expect(at('openOffice')).toBe(reachedThree?.step);
   });
 
   it('跑几天：每条便签最多出现一次，按出现的先后排队，出现的步不减', () => {
@@ -295,7 +298,7 @@ describe('结局：三个片区都到了四星', () => {
 
 // ---- 确定性 ----
 
-/** 一段带命令和直接改状态的脚本，覆盖日结、解锁、两套规矩、小结、便签、结局以外的新字段。两次运行用同样的脚本。 */
+/** 一段带命令和直接改状态的脚本，覆盖日结、解锁、两套策略、小结、便签、结局以外的新字段。两次运行用同样的脚本。 */
 function scripted(seed: number): { state: SimState; hashes: string[] } {
   const state = campaignState({ seed });
   const hashes: string[] = [hashState(state)];
@@ -331,7 +334,7 @@ describe('经营模式的状态：确定性', () => {
     expect(a.hashes).toEqual(b.hashes);
     expect(new Set(a.hashes).size).toBeGreaterThan(a.hashes.length * 0.95);
     const campaign = campaignOf(a.state);
-    // 脚本确实走到了新字段：日结（第 3600 步和第 7200 步）、六场小结、便签、两套规矩
+    // 脚本确实走到了新字段：日结（第 3600 步和第 7200 步）、六场小结、便签、两套策略
     expect(campaign.days.length).toBe(2);
     expect(campaign.peaks.length).toBe(6);
     expect(campaign.ruleSets).not.toBeNull();
@@ -359,7 +362,7 @@ describe('经营模式的状态：确定性', () => {
     expect(campaignOf(restored).days.length).toBe(4); // 脚本走到第 10800 步之前，之后又走了两个游戏日：第 10800 步和第 14400 步各做一次日结
   });
 
-  it('分段推进等于一次推进：日结、两套规矩的切换、小结都与怎么分段无关', () => {
+  it('分段推进等于一次推进：日结、两套策略的切换、小结都与怎么分段无关', () => {
     const make = (): SimState => {
       const s = runningState(61);
       unlockAll(s);
@@ -381,15 +384,15 @@ describe('经营模式的状态：确定性', () => {
   });
 });
 
-describe('经营模式的状态：哈希覆盖口碑、解锁、规矩、日结和小结、便签、结局的字段', () => {
-  /** 跑到有日结、小结、便签、两套规矩、结局的状态。 */
+describe('经营模式的状态：哈希覆盖口碑、解锁、策略、日结和小结、便签、结局的字段', () => {
+  /** 跑到有日结、小结、便签、两套策略、结局的状态。 */
   function rich(): SimState {
     const { state } = scripted(54);
     campaignOf(state).ending = { step: 1, days: 1, orders: 1 };
     return state;
   }
 
-  it('改动口碑计数、各项开放的步、两套规矩、日结和小结的记录、便签、送达总数、结局里的任何一个字段，哈希都会变', () => {
+  it('改动口碑计数、各项开放的步、两套策略、日结和小结的记录、便签、送达总数、结局里的任何一个字段，哈希都会变', () => {
     const state = rich();
     const base = hashState(state);
     const mutate: [string, (c: ReturnType<typeof campaignOf>) => void][] = [
@@ -409,6 +412,14 @@ describe('经营模式的状态：哈希覆盖口碑、解锁、规矩、日结�
       ['peaks.segments', (c) => (c.peaks[0]!.segments = null)],
       ['peaks.early', (c) => (c.peaks[0]!.early = 7)],
       ['peaks.extra', (c) => (c.peaks[3]!.extra = { id: 'notNearest', percent: 1 })],
+      ['peaks.districts.line', (c) => (c.peaks[2]!.districts[0]!.line = (c.peaks[2]!.districts[0]!.line ?? 0) + 1)],
+      ['peaks.districts.met', (c) => (c.peaks[2]!.districts[0]!.met = c.peaks[2]!.districts[0]!.met !== true)],
+      ['peaks.cleared', (c) => (c.peaks[1]!.cleared = c.peaks[1]!.cleared !== true)],
+      ['peaks.baseline', (c) => (c.peaks[1]!.baseline = { orders: 1, onTime: 1, late: 0, lateOpen: 0, cancelled: 0, revenue: 5, districts: [], lowLoad: false })],
+      ['days.peaksJudged', (c) => (c.days[0]!.peaksJudged += 1)],
+      ['days.peaksCleared', (c) => (c.days[0]!.peaksCleared += 1)],
+      ['goals', (c) => (c.goals = { day: 0, peak: 'noon', step: 600, goals: [] })],
+      ['goals.line', (c) => (c.goals = { day: 0, peak: 'noon', step: 600, goals: [{ district: 0, kind: 'line', line: 70, basis: 'next' }] })],
       ['tips.read', (c) => (c.tips[0]!.read = !c.tips[0]!.read)],
       ['tips.station', (c) => (c.tips[0]!.station = 3)],
       ['delivered', (c) => (c.delivered += 1)],

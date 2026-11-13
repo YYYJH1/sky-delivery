@@ -8,7 +8,8 @@ import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { OPENING_ORDERS_V1 } from '../src/content/opening_v1.ts';
 import { CONTENT_VERSION } from '../src/content/version.ts';
-import { buildCampaignWorld, buildWorld, createState, districtLambda, refreshShops } from '../src/core/index.ts';
+import { DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, buildCampaignWorld, buildWorld, createState, districtLambda, refreshShops } from '../src/core/index.ts';
+import { interpolateCurve } from '../src/core/systems/curve.ts';
 import { ARRIVAL_CURVE } from '../src/core/systems/orders.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -282,27 +283,50 @@ describe('地图 v1：生成脚本', () => {
 });
 
 describe('价格表', () => {
-  it('参数：价格表，其中校准过的五个数是飞机和停机位的基础价、第 2 和第 4 座站的基准价、写字楼区的开通价', () => {
+  it('参数：飞机和停机位的基础价低、增长率高，第 3、4 座站和开通大学城的价格是后期的大笔支出', () => {
     const e = ECONOMY_V1;
     expect(e.startMoney).toBe(0);
-    expect([e.droneBase, e.droneGrowth, e.bayBase, e.bayGrowth]).toEqual([100, 1.14, 140, 1.17]);
-    expect(e.stationBase).toEqual([330, 1400, 2800]);
+    expect([e.droneBase, e.droneGrowth, e.bayBase, e.bayGrowth]).toEqual([75, 1.3, 105, 1.38]);
+    expect(e.stationBase).toEqual([330, 1900, 2800]);
     expect(e.maxStations).toBe(4);
     expect(e.gateSeconds).toEqual([1.2, 0.8, 0.4]);
     expect(e.gatePrice).toEqual([0, 240, 900]);
     expect(e.bayCap).toEqual({ small: 6, medium: 9, large: 12 });
     expect([e.doubleBoxPrice, e.doubleBoxCapacity]).toEqual([180, 2]);
     expect([e.nearestLandingPrice, e.nearestLandingMinStations]).toEqual([300, 2]);
-    expect(e.districtOpenPrice).toEqual([0, 200, 1600]);
+    expect(e.districtOpenPrice).toEqual([0, 200, 2600]);
     expect(e.districtOpenStars).toBe(3);
     expect(e.openingDrones).toBe(2);
     expect(e.baysAtBuild).toBe(2);
   });
+
+  it('增长率和基础价的关系：头几架比原来便宜，满配一座站（12 个停机位、12 架飞机）的价钱近两倍', () => {
+    const e = ECONOMY_V1;
+    const drone = (n: number): number => Math.round(e.droneBase * e.droneGrowth ** Math.max(0, n - 3));
+    const bay = (n: number): number => Math.round(e.bayBase * e.bayGrowth ** (n - 3));
+    const range = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const whole = range.reduce((sum, n) => sum + drone(n) + bay(n), 0);
+    expect(whole).toBe(9843);
+    expect(whole / 5068).toBeGreaterThan(1.9); // 原来的价格表是 5,068
+    // 开局的站第 3 架飞机和第 3 个停机位都比原来便宜
+    expect(drone(3)).toBeLessThan(100);
+    expect(bay(3)).toBeLessThan(140);
+  });
 });
 
 describe('各片区的订单规律', () => {
-  it('基础来单率：老街 11，写字楼区 40，大学城 18（前两个校准过），星级倍数是 1.25 的 0 到 4 次方', () => {
-    expect(DISTRICT_RATES_V1.map((d) => d.baseRate)).toEqual([11, 40, 18]);
+  /** 一个片区在某个时间窗口（天内的步，不含终点）里一星时的期望订单数。 */
+  function windowOrders(district: number, from: number, to: number): number {
+    let sum = 0;
+    for (let tick = from; tick < to; tick++) sum += districtLambda(district, tick, 1);
+    return sum;
+  }
+  const NOON: [number, number] = [NOON_WINDOW.start, NOON_WINDOW.end];
+  const EVENING: [number, number] = [EVENING_WINDOW.start, EVENING_WINDOW.end];
+  const at = (district: number, second: number): number => interpolateCurve((DISTRICT_RATES_V1[district] as { curveSeconds: number[] }).curveSeconds, (DISTRICT_RATES_V1[district] as { curveRate: number[] }).curveRate, second);
+
+  it('基础来单率：老街 10，写字楼区 40，大学城 36，星级倍数是 1.25 的 0 到 4 次方', () => {
+    expect(DISTRICT_RATES_V1.map((d) => d.baseRate)).toEqual([10, 40, 36]);
     expect(STAR_MULTIPLIER_V1).toEqual([1, 1.25, 1.5625, 1.953125, 2.44140625]);
     // 每升一星乘 1.25，掉一星除以 1.25，与日结文案「多两成半」「少两成」一致
     STAR_MULTIPLIER_V1.forEach((m, i) => {
@@ -322,34 +346,60 @@ describe('各片区的订单规律', () => {
     }
   });
 
-  it('老街沿用沙盒里的双峰曲线：每一步的相对来单率都相同', () => {
-    for (let tick = 0; tick < 3600; tick += 1) {
-      expect(districtLambda(0, tick, 1)).toBe((((DISTRICT_RATES_V1[0] as { baseRate: number }).baseRate / 60) * (ARRIVAL_CURVE[tick] as number) * 1) * 0.1);
+  it('每步的来单率 = 基础来单率 / 60 × 曲线 × 星级倍数 × 每步秒数', () => {
+    const base = (k: number): number => (DISTRICT_RATES_V1[k] as { baseRate: number }).baseRate;
+    expect(districtLambda(0, 900, 1)).toBeCloseTo((base(0) / 60) * at(0, 90) * 1 * 0.1, 12);
+    expect(districtLambda(0, 900, 3)).toBeCloseTo((base(0) / 60) * at(0, 90) * 1.5625 * 0.1, 12);
+    expect(districtLambda(1, 900, 5)).toBeCloseTo((base(1) / 60) * at(1, 90) * 2.44140625 * 0.1, 12);
+    expect(districtLambda(2, 2600, 2)).toBeCloseTo((base(2) / 60) * at(2, 260) * 1.25 * 0.1, 12);
+    // 沙盒的到达曲线不受经营模式的内容表影响：沙盒里一星的老街仍是双峰，午高峰和晚高峰高度之比不同于这里的老街
+    expect(ARRIVAL_CURVE[900]).toBe(1);
+  });
+
+  it('三个片区的高峰各在自己的位置：写字楼区的最高点在午高峰，老街和大学城的最高点在晚高峰', () => {
+    const peakAt = (k: number): number => {
+      const d = DISTRICT_RATES_V1[k] as { curveSeconds: number[]; curveRate: number[] };
+      return d.curveSeconds[d.curveRate.indexOf(1)] as number;
+    };
+    expect(peakAt(1)).toBeGreaterThanOrEqual(NOON_WINDOW.start / 10);
+    expect(peakAt(1)).toBeLessThan(NOON_WINDOW.end / 10);
+    for (const k of [0, 2]) {
+      expect(peakAt(k), `district ${k}`).toBeGreaterThanOrEqual(EVENING_WINDOW.start / 10);
+      expect(peakAt(k), `district ${k}`).toBeLessThan(EVENING_WINDOW.end / 10);
     }
   });
 
-  it('写字楼区午高峰高、晚间低，大学城晚高峰和夜间高、午间低', () => {
-    const at = (district: number, second: number): number => districtLambda(district, second * 10, 1) / 0.1 / ((DISTRICT_RATES_V1[district] as { baseRate: number }).baseRate / 60);
-    // 午高峰第 75 到 120 秒，晚高峰第 232 到 283 秒，夜间第 330 秒
-    expect(at(1, 100)).toBeCloseTo(1, 9);
-    expect(at(1, 260)).toBeLessThan(0.4);
-    expect(at(1, 330)).toBeLessThan(0.15);
-    expect(at(2, 260)).toBeCloseTo(1, 9);
-    expect(at(2, 100)).toBeLessThan(0.4);
-    expect(at(2, 330)).toBeGreaterThan(0.6);
-    // 与老街相比：写字楼区午间最高，大学城晚间最高
-    const peaks = DISTRICT_RATES_V1.map((d) => d.curveSeconds[d.curveRate.indexOf(1)] as number);
-    expect(peaks[1]).toBeGreaterThanOrEqual(75);
-    expect(peaks[1]).toBeLessThanOrEqual(120);
-    expect(peaks[2]).toBeGreaterThanOrEqual(232);
-    expect(peaks[2]).toBeLessThanOrEqual(283);
+  it('老街午高峰低、晚高峰高，写字楼区晚高峰低，大学城午高峰低：高台处的相对来单率', () => {
+    // 午高峰的高台是第 75 到 120 秒，晚高峰的高台是第 232 到 283 秒
+    expect(at(0, 100)).toBeLessThan(at(0, 260));
+    expect(at(0, 100)).toBeGreaterThan(0.5);
+    expect(at(1, 100)).toBe(1);
+    expect(at(1, 260)).toBeLessThanOrEqual(0.5);
+    expect(at(1, 260)).toBeGreaterThan(at(1, 330));
+    expect(at(2, 260)).toBe(1);
+    expect(at(2, 100)).toBeLessThanOrEqual(0.4);
   });
 
-  it('每步的来单率 = 基础来单率 / 60 × 曲线 × 星级倍数 × 每步秒数', () => {
-    expect(districtLambda(0, 900, 1)).toBeCloseTo((11 / 60) * 1 * 1 * 0.1, 12);
-    expect(districtLambda(0, 900, 3)).toBeCloseTo((11 / 60) * 1 * 1.5625 * 0.1, 12);
-    expect(districtLambda(1, 900, 5)).toBeCloseTo((40 / 60) * 1 * 2.44140625 * 0.1, 12);
-    expect(districtLambda(2, 2600, 2)).toBeCloseTo((18 / 60) * 1 * 1.25 * 0.1, 12);
+  it('午高峰主要是写字楼区的订单，晚高峰主要是老街和大学城的订单：一星时各片区在两场高峰里的占比', () => {
+    const noon = [0, 1, 2].map((k) => windowOrders(k, ...NOON));
+    const evening = [0, 1, 2].map((k) => windowOrders(k, ...EVENING));
+    const sum = (v: number[]): number => v.reduce((a, b) => a + b, 0);
+    // 午高峰：写字楼区占一半以上，是最大的片区
+    expect((noon[1] as number) / sum(noon)).toBeGreaterThan(0.5);
+    expect(noon[1]).toBeGreaterThan(Math.max(noon[0] as number, noon[2] as number));
+    // 晚高峰：老街和大学城合起来占一半以上，写字楼区不是最大的片区
+    expect(((evening[0] as number) + (evening[2] as number)) / sum(evening)).toBeGreaterThan(0.5);
+    expect(evening[1]).toBeLessThan(evening[2] as number);
+    // 晚高峰的订单总数比午高峰多，晚高峰有压力
+    expect(sum(evening)).toBeGreaterThan(sum(noon));
+  });
+
+  it('每个片区的订单集中在自己的高峰里：两场高峰的订单占全天的七成以上，平时来单很少', () => {
+    for (const k of [0, 1, 2]) {
+      const day = windowOrders(k, 0, DAY_STEPS);
+      const peaks = windowOrders(k, ...NOON) + windowOrders(k, ...EVENING);
+      expect(peaks / day, `district ${k}`).toBeGreaterThan(0.7);
+    }
   });
 });
 

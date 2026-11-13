@@ -1,8 +1,8 @@
 // 经营模式里玩家的命令：建站、添飞机、加停机位、升级起降口、双层货箱、就近降落、开通片区、
-// 换规矩卡、点击订单插队、便签标记已读，以及当天原价退回。
+// 换策略卡、点击订单插队、便签标记已读，以及当天原价退回。
 // 命令在两步之间生效。每个命令先检查条件，不满足时不执行，状态一点不变，返回一个英文的原因代码，界面按代码查词表。
 // 价签、双层货箱、片区的显示、调度台的栏和卡都有开放条件（见 unlocks.ts），没开放时命令失败。
-// 经营模式的调度台只有内容表 rules_v1 列出的卡，换成表外的卡（例如「一趟送一单」）同样失败，原因也是 ruleLocked。
+// 经营模式的调度台只有内容表 rules_v1 列出的卡，换成表外的卡（例如「单独配送」）同样失败，原因也是 ruleLocked。
 // quoteCommand 是只读的，返回某个命令现在的价格和能不能执行，给界面的价签用。
 import { ECONOMY_V1 } from '../../content/economy_v1.ts';
 import { MAP_V1 } from '../../content/map_v1.ts';
@@ -51,7 +51,7 @@ export type CommandFailure =
   | 'needTwoStations' // 就近降落需要两座以上的站
   | 'alreadyOpen' // 片区已经开通
   | 'needStars' // 上一个片区还没达到三星
-  | 'unknownRule' // 规矩卡不存在
+  | 'unknownRule' // 策略卡不存在
   | 'orderNotWaiting' // 订单不是等待派单的状态，或者已经点击过
   | 'alreadyRefunded' // 这架飞机或这座站已经退回
   | 'notBoughtToday' // 不是当天买的，或者是开局自带的，不能退
@@ -61,8 +61,8 @@ export type CommandFailure =
   | 'notEnoughMoney' // 余额不够
   | 'priceTagsLocked' // 价签还没开放：第一次日结之后余额达到内容表里的数才开放
   | 'doubleBoxLocked' // 双层货箱还没开放：停机位到了屋顶上限，并且之后的一场高峰小结说订单主要在等飞机
-  | 'districtHidden' // 这个片区还没显示：上一个片区还没有到过三星
-  | 'ruleLocked' // 这一栏或这张规矩卡还没开放，或者经营模式的调度台里没有这张卡
+  | 'districtHidden' // 这个片区还没显示：内容表 UNLOCKS_V1.show 里显示它的条件还没达到过
+  | 'ruleLocked' // 这一栏或这张策略卡还没开放，或者经营模式的调度台里没有这张卡
   | 'noRuleSets'; // 还没有分成午晚两套（开通写字楼区之前），不能指定改哪一套
 
 export type CommandResult = { ok: true; id: number } | { ok: false; reason: CommandFailure };
@@ -256,7 +256,7 @@ function evaluate(state: SimState, command: Command): Evaluation {
       return plan('buy', price, () => {
         state.capacity = ECONOMY_V1.doubleBoxCapacity;
         spend(campaign, price);
-        // 买下的同时「一趟送几单」一栏开放（refreshUnlocks），这一栏自动从「一趟送一单」换成「顺路的一起送」，
+        // 买下的同时「合单策略」一栏开放（refreshUnlocks），这一栏自动从「单独配送」换成「顺路合并」，
         // 否则买了货箱也不会一起送。这次自动换卡不算玩家换卡，不记进 stats.ruleChanges
         autoPoolAfterDoubleBox(state);
         return -1;
@@ -407,7 +407,7 @@ export function applyCommand(state: SimState, command: Command): CommandResult {
   const evaluation = evaluate(state, command);
   if (!evaluation.ok) return { ok: false, reason: evaluation.reason };
   const id = evaluation.plan.run();
-  refreshUnlocks(state); // 命令的效果马上看得到：第二座站建成，「别的站帮不帮」一栏当场开放
+  refreshUnlocks(state); // 命令的效果马上看得到：第二座站建成，「协同策略」一栏当场开放
   return { ok: true, id };
 }
 

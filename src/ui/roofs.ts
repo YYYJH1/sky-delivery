@@ -110,3 +110,15 @@ export function roofLines(c: CandidateRoof): string[] {
   }
   return lines;
 }
+
+/**
+ * 地图上候选屋顶旁边的文字块要摆的几行：和 roofLines 是同样的内容，写着飞行秒数的那一句拆成店和楼两行，
+ * 文字块窄一些，盖住的地图少一些。文字取自词表。
+ */
+export function roofLabelLines(c: CandidateRoof): string[] {
+  const lines = [fmt(STR.hud.roof.line, { size: STR.hud.roof.size[c.size], limit: c.bayLimit, price: c.price })];
+  if (c.flight.shops !== null && c.flight.buildings !== null) {
+    lines.push(fmt(STR.hud.roof.distanceShops, { seconds: secondsText(c.flight.shops) }), fmt(STR.hud.roof.distanceBuildings, { seconds: secondsText(c.flight.buildings) }));
+  }
+  return lines;
+}

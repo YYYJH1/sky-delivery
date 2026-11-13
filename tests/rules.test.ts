@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ruleName } from '../src/content/strings.zh.ts';
 import {
   DroneState,
   OrderStatus,
@@ -32,7 +33,7 @@ function ctxOf(orders: Order[], flyTime: number[], now: number, pendingIds?: num
   return { state: { orders } as unknown as SimState, now, pendingIds: pendingIds ?? orders.map((o) => o.id), flyTime, tripTime: () => [] };
 }
 
-describe('先送哪张单的两条规则', () => {
+describe('调度策略的两条规则', () => {
   // 四张订单。下单时刻（步）、出餐完成（步）、店到楼的距离，最近的可用飞机飞到店的用时（秒）。现在是第 1000 步。
   const four = [
     makeOrder({ id: 0, tOrder: 900, prepDone: 950, dMB: 550 }),
@@ -42,11 +43,11 @@ describe('先送哪张单的两条规则', () => {
   ];
   const fly = [5, 2, 1, Infinity]; // 第 4 张没有可用飞机
 
-  it('先下单的先送：按下单时间排序', () => {
+  it('先到先送：按下单时间排序', () => {
     expect(fifoRule.rank(ctxOf(four, fly, 1000))).toEqual([2, 0, 1, 3]);
   });
 
-  it('快超时的先送：赶得上的按剩余时间从少到多，赶不上的排在后面，没有飞机能接的排在最后', () => {
+  it('时限优先：赶得上的按剩余时间从少到多，赶不上的排在后面，没有飞机能接的排在最后', () => {
     // 订单 0：取餐在 105 秒，送到在 112.4 秒，承诺在 120 秒，剩余 7.6 秒
     // 订单 1：取餐在 102 秒，送到在 114.4 秒，承诺在 125 秒，剩余 10.6 秒
     // 订单 2：承诺在 80 秒，早已赶不上
@@ -98,7 +99,7 @@ function ctxWithTrip(orders: Order[], flyTime: number[], trip: number[], now: nu
   return { ...ctxOf(orders, flyTime, now, pendingIds), tripTime: () => trip };
 }
 
-describe('来回快的先送', () => {
+describe('短程优先', () => {
   // 整趟用时（秒）：订单 0 是 20，订单 1 和 2 都是 8，订单 3 和 4 没有飞机能接
   const orders = [
     makeOrder({ id: 0, tOrder: 900, dMB: 550 }),
@@ -156,13 +157,13 @@ describe('来回快的先送', () => {
     expect(far.status).toBe(OrderStatus.Pending);
   });
 
-  it('「先下单的先送」在同一局面里派出先下单的', () => {
+  it('「先到先送」在同一局面里派出先下单的', () => {
     const { state, far } = farThenNear('fifo');
     expect(dispatchRound(state).dispatched).toEqual([far.id]);
   });
 });
 
-describe('某一片的先送', () => {
+describe('{片区}优先', () => {
   // 六张订单，送往老街、写字楼区、大学城各两张。现在是第 1000 步，每张都有飞机能接，飞到店 2 秒，出餐早已完成。
   // 取餐在 102 秒。剩余时间 = 下单时刻 + 30 - (102 + 1.2 + 店到楼用时 + 1.2)，每张订单手算如下：
   //   0：90 秒下单，店到楼 9 秒，剩余 6.6，老街
@@ -181,11 +182,11 @@ describe('某一片的先送', () => {
   ];
   const fly = [2, 2, 2, 2, 2, 2];
 
-  it('快超时的先送按剩余时间排：0、1、3、4、2、5', () => {
+  it('时限优先按剩余时间排：0、1、3、4、2、5', () => {
     expect(deadlineRule.rank(ctxOf(orders, fly, 1000))).toEqual([0, 1, 3, 4, 2, 5]);
   });
 
-  it('送到指定片区的订单排在最前，两部分各自保持「快超时的先送」的次序', () => {
+  it('送到指定片区的订单排在最前，两部分各自保持「时限优先」的次序', () => {
     expect(prioOldRule.rank(ctxOf(orders, fly, 1000))).toEqual([0, 4, 1, 3, 2, 5]);
     expect(prioOfficeRule.rank(ctxOf(orders, fly, 1000))).toEqual([1, 3, 0, 4, 2, 5]);
     expect(prioCampusRule.rank(ctxOf(orders, fly, 1000))).toEqual([2, 5, 0, 1, 3, 4]);
@@ -193,9 +194,9 @@ describe('某一片的先送', () => {
 
   it('指定片区里没有飞机能接的订单，也排在其他片区有飞机能接的订单前面', () => {
     const noFly = [2, Infinity, 2, 2, 2, 2]; // 订单 1（写字楼区）没有飞机能接
-    // 写字楼区里，赶得上的订单 3 在前，没有飞机的订单 1 在后，其余按快超时的先送
+    // 写字楼区里，赶得上的订单 3 在前，没有飞机的订单 1 在后，其余按时限优先
     expect(prioOfficeRule.rank(ctxOf(orders, noFly, 1000))).toEqual([3, 1, 0, 4, 2, 5]);
-    expect(deadlineRule.rank(ctxOf(orders, noFly, 1000))).toEqual([0, 3, 4, 2, 5, 1]); // 快超时的先送里它在最后
+    expect(deadlineRule.rank(ctxOf(orders, noFly, 1000))).toEqual([0, 3, 4, 2, 5, 1]); // 时限优先里它在最后
   });
 
   it('指定片区里已经赶不上的订单，也排在其他片区赶得上的订单前面，片区内部仍是赶得上的在先', () => {
@@ -207,7 +208,7 @@ describe('某一片的先送', () => {
     expect(prioOfficeRule.rank(now)).toEqual([3, 1, 4, 2, 5, 0]);
   });
 
-  it('指定片区里没有订单时，次序与快超时的先送相同', () => {
+  it('指定片区里没有订单时，次序与时限优先相同', () => {
     const noOffice = orders.map((o) => makeOrder({ ...o, district: o.district === 1 ? 0 : o.district }));
     expect(prioOfficeRule.rank(ctxOf(noOffice, fly, 1000))).toEqual(deadlineRule.rank(ctxOf(noOffice, fly, 1000)));
   });
@@ -220,10 +221,10 @@ describe('某一片的先送', () => {
 
   it('核心里每个片区一张卡，名称按界面上的写法', () => {
     expect(ruleIds('select')).toEqual(expect.arrayContaining(['prioOld', 'prioOffice', 'prioCampus']));
-    expect([RULE_NAMES.prioOld, RULE_NAMES.prioOffice, RULE_NAMES.prioCampus]).toEqual(['老街的先送', '写字楼区的先送', '大学城的先送']);
+    expect([RULE_NAMES.prioOld, RULE_NAMES.prioOffice, RULE_NAMES.prioCampus]).toEqual((['prioOld', 'prioOffice', 'prioCampus'] as const).map(ruleName));
   });
 
-  it('排序用到的片区是订单送往的片区：整局运行里，写字楼区的先送让送往写字楼区的订单更早派出', () => {
+  it('排序用到的片区是订单送往的片区：整局运行里，写字楼区优先让送往写字楼区的订单更早派出', () => {
     const run = (select: string): SimState => {
       const state = createState({ scenario: 'threeDistricts', drones: 16, peakRate: 82, gateInterval: 0.8, seed: 42, rules: { select } });
       advance(state, 2400);
@@ -240,7 +241,7 @@ describe('某一片的先送', () => {
   });
 });
 
-describe('等 10 秒再帮', () => {
+describe('延迟支援', () => {
   /** 两座站各一架飞机。订单的店离 0 号站最近，下单时刻 1000。 */
   function scene(zone: string, free: 0 | 1): { state: SimState; order: Order } {
     const state = createState({ scenario: 'threeDistricts', drones: 2, rules: { zone } });
@@ -273,7 +274,7 @@ describe('等 10 秒再帮', () => {
     expect(okAt(state, 1050)).toEqual([1]);
   });
 
-  it('另两张卡作对照：哪座站都能送一直可以接，只由最近的站送一直不能接别的站的飞机', () => {
+  it('另两张卡作对照：全站协同一直可以接，仅限最近站点一直不能接别的站的飞机', () => {
     for (const step of [1000, 1099, 1100, 3000]) {
       expect(okAt(scene('global', 1).state, step)).toEqual([1]);
       expect(okAt(scene('strict', 1).state, step)).toEqual([0]);
@@ -422,7 +423,7 @@ describe('「提前派出」的统计', () => {
     const SPEC = { portion: 1, prepSteps: 40 };
 
     /**
-     * 两座站、三架可用飞机：0 号站两架（0、1 号），1 号站一架（2 号）。「别的站帮不帮」为只由最近的站送，现在是第 150 步。
+     * 两座站、三架可用飞机：0 号站两架（0、1 号），1 号站一架（2 号）。「协同策略」为仅限最近站点，现在是第 150 步。
      * 甲、乙是同一家店的订单，这家店离 1 号站最近，所以只有 2 号飞机能接。甲的楼近，乙的楼离店约 1000，晚下单 5 步。
      * 丙的店离 0 号站最近，由 0、1 号飞机接，楼近，最晚下单。下单顺序是甲、乙、丙，订单编号 0、1、2。
      */
@@ -439,7 +440,7 @@ describe('「提前派出」的统计', () => {
     }
 
     it('名单只含满足派单条件的订单：没有飞机能接的订单不在名单里，也不占名额', () => {
-      // 两座站各一架飞机，0 号站的飞机在空中，只有 1 号飞机可用。「只由最近的站送」时，离 0 号站近的店没有飞机能接
+      // 两座站各一架飞机，0 号站的飞机在空中，只有 1 号飞机可用。「仅限最近站点」时，离 0 号站近的店没有飞机能接
       const state = createState({ scenario: 'threeDistricts', drones: 2, rules: { select: 'fifo', zone: 'strict' } });
       (state.drones[0] as Drone).state = DroneState.Fly;
       const shop0 = shopOf(state, 0);
@@ -472,7 +473,7 @@ describe('「提前派出」的统计', () => {
         { k: 2, drone: 0 },
       ]);
       expect(hashState(state)).toBe(before); // 算方案不修改状态
-      // 先下单的先送：实际也是甲和丙。名单是甲、丙，丙在名单里，不记。
+      // 先到先送：实际也是甲和丙。名单是甲、丙，丙在名单里，不记。
       // 旧办法取「有飞机能接的订单里最早的两张」，名单是甲、乙，会把丙误记为提前派出
       const result = dispatchRound(state);
       expect(result.dispatched).toEqual([a.id, c.id]);
@@ -482,10 +483,10 @@ describe('「提前派出」的统计', () => {
       expect(b.status).toBe(OrderStatus.Pending);
     });
 
-    it('同一个局面换成快超时的先送：排序与下单顺序不同，记数与按下单顺序手算的名单一致', () => {
+    it('同一个局面换成时限优先：排序与下单顺序不同，记数与按下单顺序手算的名单一致', () => {
       const { state, a, b, c } = threeOrders('deadline');
       const round = buildRound(state);
-      // 乙的楼更远，剩余时间比甲少：快超时的先送把乙排在甲前面
+      // 乙的楼更远，剩余时间比甲少：时限优先把乙排在甲前面
       const ranked = deadlineRule.rank(round.ctx);
       expect(ranked.indexOf(1)).toBeLessThan(ranked.indexOf(0));
       // 手算。按下单顺序（甲、乙、丙）：甲拿走 2 号飞机，乙没有飞机，丙拿走 0 号飞机，名单是甲、丙。
@@ -550,12 +551,12 @@ describe('「提前派出」的统计', () => {
 
     it.each([
       [599, false],
-      [600, false], // 恰在高峰开始：自动切换到这一场的规矩，不算中途
+      [600, false], // 恰在高峰开始：自动切换到这一场的策略，不算中途
       [601, true],
       [1200, true],
       [1799, true],
       [1800, false], // 小结生成之后换的卡，属于下一场
-    ])('第 %i 步换「先送哪张单」：中途换过 = %s，换过时不给数量', (step, changed) => {
+    ])('第 %i 步换「调度策略」：中途换过 = %s，换过时不给数量', (step, changed) => {
       const state = noonState();
       state.step = step;
       setRules(state, { select: 'deadline' });
@@ -594,7 +595,7 @@ describe('派单的一轮', () => {
     return { state, x, y };
   }
 
-  it('快超时的先送：派出剩余时间更少的订单，它比按下单顺序更早，记一次提前派出', () => {
+  it('时限优先：派出剩余时间更少的订单，它比按下单顺序更早，记一次提前派出', () => {
     const { state, x, y } = twoOrders('deadline');
     // 独立算一遍剩余时间，确认这个例子成立
     const drone = state.drones[0] as { x: number; y: number };
@@ -616,7 +617,7 @@ describe('派单的一轮', () => {
     expect(state.stats.early).toEqual([{ step: 150, order: y.id, rule: 'deadline', day: 0, peak: -1 }]);
   });
 
-  it('先下单的先送：派出更早的订单，不记提前派出', () => {
+  it('先到先送：派出更早的订单，不记提前派出', () => {
     const { state, x } = twoOrders('fifo');
     const result = dispatchRound(state);
     expect(result.dispatched).toEqual([x.id]);
@@ -655,7 +656,7 @@ describe('派单的一轮', () => {
     expect(y.status).toBe(OrderStatus.Pending);
   });
 
-  it('候选情况：飞到店的用时、整趟用时，以及「只由最近的站送」只允许本站的飞机', () => {
+  it('候选情况：飞到店的用时、整趟用时，以及「仅限最近站点」只允许本站的飞机', () => {
     const state = createState({ scenario: 'threeDistricts', drones: 4, rules: { select: 'fifo', zone: 'strict' } });
     const station0 = state.stations[0] as { x: number; y: number };
     // 订单的店在老街，离 0 号站最近
@@ -750,13 +751,13 @@ describe('规则注册表', () => {
     (RULE_REGISTRY.pool as Record<string, PoolRule>).probe = probe;
     expect(ruleIds('select')).toContain('newest');
 
-    // 新的「先送哪张单」：最新的先送
+    // 新的「调度策略」：最新的先送
     const state = createState({ ...OPENING, drones: 1, capacity: 2, rules: { select: 'newest', pool: 'probe' } });
     addOrder(state, { merchant: 0, building: 0, portion: 1, prepSteps: 40, tOrder: 100 });
     const later = addOrder(state, { merchant: 1, building: 1, portion: 1, prepSteps: 40, tOrder: 110 });
     state.step = 150;
     expect(dispatchRound(state).dispatched).toEqual([later.id]);
-    // 新的「一趟送几单」：有路线可插时，对订单问一次能不能一起送。
+    // 新的「合单策略」：有路线可插时，对订单问一次能不能一起送。
     // 实际的方案里订单 1 先交给空闲飞机，之后才有路线，所以问了订单 0。
     // 比较名单按下单顺序再算一遍，订单 0 先交给空闲飞机，所以问了订单 1
     expect(calls).toEqual([0, 1]);
@@ -765,7 +766,7 @@ describe('规则注册表', () => {
     expect(dispatchRound(state).dispatched).toEqual([]);
     expect(calls).toEqual([0, 1, 0]);
 
-    // 新的「别的站帮不帮」：谁也不能接
+    // 新的「协同策略」：谁也不能接
     const idle = createState({ ...OPENING, drones: 1, rules: { zone: 'never' } });
     addOrder(idle, { merchant: 0, building: 0, portion: 1, prepSteps: 40 });
     expect(dispatchRound(idle).dispatched).toEqual([]);

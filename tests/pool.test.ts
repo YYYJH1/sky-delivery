@@ -1,4 +1,4 @@
-// 一趟送几单的卡：同一家店的一起送、顺路的一起送。插入的每一条限制各有一个手工摆出的局面。
+// 合单策略的卡：同店合并、顺路合并。插入的每一条限制各有一个手工摆出的局面。
 // 地图是手工摆的：店和楼都在一条横线附近，站在原点，飞机一步飞 11，取餐、送达各 12 步，起飞 8 步。
 import { describe, expect, it } from 'vitest';
 import {
@@ -33,7 +33,7 @@ const B3 = [2200, 220] as [number, number];
 const MERCHANT = { m0: 0, m1: 1, m2: 2 };
 const BUILDING = { b0: 0, b1: 1, b2: 2, b3: 3 };
 
-/** 一座站在原点、一架飞机（默认）、载量 2、顺路的一起送、先下单的先送、哪座站都能送。 */
+/** 一座站在原点、一架飞机（默认）、载量 2、顺路合并、先到先送、全站协同。 */
 function lineScene(overrides: ConfigOverrides = {}): { state: SimState; drone: Drone } {
   const state = createState(
     { scenario: 'oldStreet', drones: 1, capacity: 2, peakRate: 0, gateInterval: 0.8, rules: { pool: 'any' }, ...overrides },
@@ -152,7 +152,7 @@ describe('插入：只接受同乘', () => {
     expect([a.drone, b.drone, a.tAssign === b.tAssign, b.departed]).toEqual([0, 0, true, 0]);
     expect(drone.route.length).toBe(4);
     expect(drone.state).toBe(DroneState.TakeoffQueue);
-    // 一趟送一单：后面的订单只能等
+    // 单独配送：后面的订单只能等
     const single = lineScene({ rules: { pool: 'single' } });
     const a1 = send(single.state, MERCHANT.m0, BUILDING.b0, 10);
     const b1 = send(single.state, MERCHANT.m1, BUILDING.b2, 10);
@@ -195,7 +195,7 @@ describe('插入：路线里已经没有取餐点就不再接受', () => {
 });
 
 describe('插入：一起送的范围', () => {
-  it('顺路的一起送不同的店也能一起送，同一家店的一起送不同的店不能一起送、同一家店可以', () => {
+  it('顺路合并不同的店也能一起送，同店合并不同的店不能一起送、同一家店可以', () => {
     const run = (pool: string, merchant: number): number => {
       const { state } = flyingToM0({ rules: { pool } });
       const b = send(state, merchant, BUILDING.b2, 10);
@@ -208,7 +208,7 @@ describe('插入：一起送的范围', () => {
     expect(run('any', MERCHANT.m0)).toBe(OrderStatus.Assigned);
   });
 
-  it('同一家店的一起送：路线上已有两张订单时，要求它们都和新订单同一家店', () => {
+  it('同店合并：路线上已有两张订单时，要求它们都和新订单同一家店', () => {
     const state = createState(
       { scenario: 'oldStreet', drones: 1, capacity: 3, peakRate: 0, rules: { pool: 'same' } },
       customWorld('oldStreet', [M0, M1, M2], [B0, B1, B2, B3]),
@@ -221,13 +221,13 @@ describe('插入：一起送的范围', () => {
     const b = send(state, MERCHANT.m0, BUILDING.b2, 10);
     dispatchRound(state);
     expect(b.drone).toBe(0);
-    const c = send(state, MERCHANT.m1, BUILDING.b2, 10); // 另一家店：同一家店的一起送不让它上
+    const c = send(state, MERCHANT.m1, BUILDING.b2, 10); // 另一家店：同店合并不让它上
     dispatchRound(state);
     expect(c.status).toBe(OrderStatus.Pending);
     expect(new Set(drone.route.map((s) => s.order))).toEqual(new Set([a.id, b.id]));
   });
 
-  it('载量为 1 时，顺路的一起送和同一家店的一起送都插不进任何订单，没有空闲飞机的轮次直接结束', () => {
+  it('载量为 1 时，顺路合并和同店合并都插不进任何订单，没有空闲飞机的轮次直接结束', () => {
     for (const pool of ['any', 'same']) {
       const { state, drone } = lineScene({ capacity: 1, rules: { pool } });
       expect(canPool(state)).toBe(false);
@@ -238,7 +238,7 @@ describe('插入：一起送的范围', () => {
       expect(dispatchRound(state)).toEqual({ dispatched: [], early: [] });
       expect(b.status).toBe(OrderStatus.Pending);
     }
-    // 一趟送一单在任何载量下都不插入
+    // 单独配送在任何载量下都不插入
     const { state, drone } = lineScene({ rules: { pool: 'single' } });
     expect(canPool(state)).toBe(false);
     send(state, MERCHANT.m0, BUILDING.b0, 10);
@@ -249,7 +249,7 @@ describe('插入：一起送的范围', () => {
     expect(b.status).toBe(OrderStatus.Pending);
   });
 
-  it('一趟送一单：载量 1 和载量 2、3 的结果完全相同，载量只在一起送时起作用', () => {
+  it('单独配送：载量 1 和载量 2、3 的结果完全相同，载量只在一起送时起作用', () => {
     const outcome = (capacity: number): unknown[] => {
       const state = runDays({ scenario: 'threeDistricts', drones: 16, peakRate: 82, gateInterval: 0.8, seed: 42, capacity, rules: { select: 'deadline', pool: 'single' } }, 2);
       return state.orders.map((o) => [o.tAssign, o.tArrive, o.tPick, o.tDeliver, o.tCancel, o.drone, o.departed, o.gateWait, o.rev, o.shared]);
@@ -377,19 +377,19 @@ describe('插入：站点分工按这一趟的出发站判断', () => {
     return { state, drone: d0, b };
   }
 
-  it('哪座站都能送：别的站的订单也能插进 0 号站飞机的路线', () => {
+  it('全站协同：别的站的订单也能插进 0 号站飞机的路线', () => {
     const { state, drone, b } = twoStations('global');
     expect(dispatchRound(state).dispatched).toEqual([b.id]);
     expect([b.drone, b.departed, b.home]).toEqual([drone.id, 0, 1]);
   });
 
-  it('只由最近的站送：本站是 1 号站的订单，不能插进 0 号站出发的飞机', () => {
+  it('仅限最近站点：本站是 1 号站的订单，不能插进 0 号站出发的飞机', () => {
     const { state, b } = twoStations('strict');
     expect(dispatchRound(state).dispatched).toEqual([]);
     expect(b.status).toBe(OrderStatus.Pending);
   });
 
-  it('只由最近的站送：本站的飞机路线可以插，哪怕飞机已经在空中', () => {
+  it('仅限最近站点：本站的飞机路线可以插，哪怕飞机已经在空中', () => {
     const { state, drone } = twoStations('strict');
     const c = send(state, 0, 1, 10); // 本站是 0 号站
     expect(c.home).toBe(0);
@@ -397,7 +397,7 @@ describe('插入：站点分工按这一趟的出发站判断', () => {
     expect(c.drone).toBe(drone.id);
   });
 
-  it('等 10 秒再帮：下单后 99 步不能插进别的站出发的飞机，满 100 步可以', () => {
+  it('延迟支援：下单后 99 步不能插进别的站出发的飞机，满 100 步可以', () => {
     const { state, b } = twoStations('hybrid');
     state.step = b.tOrder + 99;
     expect(dispatchRound(state).dispatched).toEqual([]);
@@ -535,7 +535,7 @@ describe('提前派出的名单算上插入', () => {
     expect(round.orders[1]?.id).toBe(y.id);
   });
 
-  it('快超时的先送把 Y 排在 X 前面，实际派出 Y。Y 在按下单顺序的名单里（靠插入），不记为提前派出', () => {
+  it('时限优先把 Y 排在 X 前面，实际派出 Y。Y 在按下单顺序的名单里（靠插入），不记为提前派出', () => {
     const { state, x, y } = scene('deadline');
     const round = buildRound(state);
     expect(getSelectRule('deadline').rank(round.ctx)).toEqual([1, 0]);

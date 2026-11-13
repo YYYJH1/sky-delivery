@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
-import { STR } from '../src/content/strings.zh.ts';
+import { STR, fmt } from '../src/content/strings.zh.ts';
 import { UNLOCKS_V1 } from '../src/content/unlocks_v1.ts';
 import { bayPrice, quoteCommand } from '../src/core/index.ts';
 import type { CommandFailure } from '../src/core/index.ts';
@@ -49,7 +49,7 @@ describe('对照表', () => {
     expect(generic).toEqual(['alreadyRefunded', 'noRuleSets', 'notCampaign', 'unknownCommand', 'unknownRule', 'unknownTarget']);
   });
 
-  it('价签、双层货箱、片区显示、规矩卡、订单状态、起降口和片区开通这几个代码，各对到词表里同名的条目', () => {
+  it('价签、双层货箱、片区显示、策略卡、订单状态、起降口和片区开通这几个代码，各对到词表里同名的条目', () => {
     expect(REASON_KEYS.priceTagsLocked).toBe('priceTagsLocked');
     expect(REASON_KEYS.doubleBoxLocked).toBe('doubleBoxLocked');
     expect(REASON_KEYS.districtHidden).toBe('districtHidden');
@@ -71,36 +71,36 @@ describe('对照表', () => {
 });
 
 describe('提示文字', () => {
-  it('余额不够：写还差多少钱', () => {
-    expect(failureText('notEnoughMoney', { shortfall: 30 })).toBe('钱不够，还差 ¥30。');
+  it('资金不足：写还差多少钱', () => {
+    expect(failureText('notEnoughMoney', { shortfall: 30 })).toBe(fmt(STR.reasons.notEnoughMoney, { shortfall: 30 }));
   });
 
-  it('没有空停机位：屋顶还能加就让玩家先加，屋顶放满了就让玩家去别的站', () => {
-    expect(failureText('noFreeBay', { roofFull: false })).toBe('这座站没有空停机位。先加一个停机位，再添飞机。');
-    expect(failureText('fleetFull')).toBe('这座站没有空停机位。先加一个停机位，再添飞机。');
-    expect(failureText('fleetFull', { roofFull: true, limit: 9 })).toBe('这块屋顶最多放 9 个停机位，已经放满。可以把飞机添到别的站，或者建新站。');
-    expect(failureText('noFreeBay', { roofFull: true, limit: 6 })).toContain('最多放 6 个停机位');
+  it('没有空停机位：屋顶还能加写没有空闲停机位，屋顶放满了写已达上限', () => {
+    expect(failureText('noFreeBay', { roofFull: false })).toBe(STR.reasons.noFreeBay);
+    expect(failureText('fleetFull')).toBe(STR.reasons.noFreeBay);
+    expect(failureText('fleetFull', { roofFull: true, limit: 9 })).toBe(fmt(STR.reasons.bayLimitReached, { limit: 9 }));
+    expect(failureText('noFreeBay', { roofFull: true, limit: 6 })).toContain('6 个');
   });
 
   it('停机位到了屋顶的上限、站数到了上限', () => {
-    expect(failureText('bayLimit', { limit: 12 })).toBe('这块屋顶最多放 12 个停机位，已经放满。可以把飞机添到别的站，或者建新站。');
-    expect(failureText('stationLimit', { limit: 4 })).toBe('最多建 4 座站，已经建满。可以给现有的站添飞机，或者升级起降口。');
+    expect(failureText('bayLimit', { limit: 12 })).toBe(fmt(STR.reasons.bayLimitReached, { limit: 12 }));
+    expect(failureText('stationLimit', { limit: 4 })).toBe(fmt(STR.reasons.stationLimitReached, { limit: 4 }));
   });
 
   it('片区没开通、上一个片区没到三星：带片区名', () => {
-    expect(failureText('districtClosed', { district: 1 })).toBe('写字楼区还没有开通。先开通，再建站。');
-    expect(failureText('needStars', { district: 1 })).toBe('老街到三星才能开通写字楼区。');
-    expect(failureText('needStars', { district: 2 })).toBe('写字楼区到三星才能开通大学城。');
+    expect(failureText('districtClosed', { district: 1 })).toBe(fmt(STR.reasons.districtClosed, { district: '写字楼区' }));
+    expect(failureText('needStars', { district: 1 })).toBe(fmt(STR.reasons.needThreeStars, { previous: '老街' }));
+    expect(failureText('needStars', { district: 2 })).toBe(fmt(STR.reasons.needThreeStars, { previous: '写字楼区' }));
   });
 
   it('不需要数的原因直接取词表', () => {
-    expect(failureText('roofTaken')).toBe('这块屋顶已经有站了。换一块空着的屋顶。');
-    expect(failureText('needTwoStations')).toBe('要有第二座站。');
-    expect(failureText('alreadyOwned')).toBe('这一项已经买过了。');
-    expect(failureText('notBoughtToday')).toBe('只有今天买的东西能退。');
-    expect(failureText('droneBusy')).toBe('这架飞机还在送单。等它回站再退。');
-    expect(failureText('baysInUse')).toBe('停机位不够放现有的飞机。先退一架飞机，再退停机位。');
-    expect(failureText('stationNotEmpty')).toBe('这座站还有飞机。先把飞机退掉，再退这座站。');
+    expect(failureText('roofTaken')).toBe(STR.reasons.rooftopTaken);
+    expect(failureText('needTwoStations')).toBe(STR.reasons.needTwoStations);
+    expect(failureText('alreadyOwned')).toBe(STR.reasons.alreadyOwned);
+    expect(failureText('notBoughtToday')).toBe(STR.reasons.refundOnlyToday);
+    expect(failureText('droneBusy')).toBe(STR.reasons.droneBusy);
+    expect(failureText('baysInUse')).toBe(STR.reasons.bayInUse);
+    expect(failureText('stationNotEmpty')).toBe(STR.reasons.stationDronesAway);
   });
 
   it('需要的数没给时报错，不显示错的文字', () => {
@@ -111,24 +111,25 @@ describe('提示文字', () => {
   });
 
   it('没有没选中站点这个核心代码，它是界面自己的提示', () => {
-    expect(hintText('noStationSelected')).toBe('先选一座站。');
-    expect(hintText('alreadyOwned')).toBe('这一项已经买过了。');
+    expect(hintText('noStationSelected')).toBe(STR.reasons.noStationSelected);
+    expect(hintText('alreadyOwned')).toBe(STR.reasons.alreadyOwned);
   });
 
-  it('新补的几条：价签、双层货箱、片区、规矩卡没开放，订单已经派出，起降口最高级，片区已经开通', () => {
-    expect(failureText('priceTagsLocked', { amount: UNLOCKS_V1.priceTagsBalance })).toBe(`要等第一天日结之后、余额到 ¥${UNLOCKS_V1.priceTagsBalance}，才能买东西。`);
-    expect(failureText('doubleBoxLocked')).toBe('停机位放满以后还缺飞机时，才能买双层货箱。');
-    expect(failureText('districtHidden')).toBe('上一个片区到三星之后，这一片才会出现在地图上。');
-    expect(failureText('ruleLocked')).toBe('这张卡还没开放。');
-    expect(failureText('orderNotWaiting')).toBe('这张单已经在送，或者已经排到最前了。');
-    expect(failureText('gateMax')).toBe('这座站的起降口已经是 3 级。');
-    expect(failureText('alreadyOpen')).toBe('这个片区已经开通了。');
+  it('新补的几条：价签、双层货箱、片区、策略卡没开放，订单已经派出，起降口最高级，片区已经开通', () => {
+    expect(failureText('priceTagsLocked', { amount: UNLOCKS_V1.priceTagsBalance })).toBe(fmt(STR.reasons.priceTagsLocked, { amount: UNLOCKS_V1.priceTagsBalance }));
+    expect(failureText('doubleBoxLocked')).toBe(STR.reasons.doubleBoxLocked);
+    expect(failureText('districtHidden', { district: 1 })).toBe('老街达到三星后显示');
+    expect(failureText('districtHidden', { district: 2 })).toBe('写字楼区达到四星后显示');
+    expect(failureText('ruleLocked')).toBe(STR.reasons.ruleLocked);
+    expect(failureText('orderNotWaiting')).toBe(STR.reasons.orderNotWaiting);
+    expect(failureText('gateMax')).toBe(STR.reasons.gateMax);
+    expect(failureText('alreadyOpen')).toBe(STR.reasons.alreadyOpen);
   });
 
   it('对到 generic 的六个代码显示词表里的通用提示', () => {
     expect(GENERIC_REASON).toBe('generic');
     for (const code of ['noRuleSets', 'alreadyRefunded', 'unknownTarget', 'unknownCommand', 'notCampaign', 'unknownRule'] as const) {
-      expect(failureText(code)).toBe('这一步现在做不了。');
+      expect(failureText(code)).toBe(STR.reasons.generic);
     }
   });
 
@@ -142,7 +143,7 @@ describe('提示文字', () => {
 });
 
 describe('从状态取提示要用的数', () => {
-  it('余额不够：还差的钱是价格减余额，带小数的余额向上取整，至少是 1', () => {
+  it('资金不足：还差的钱是价格减资金，带小数的资金向上取整，至少是 1', () => {
     const state = unlockAll(campaignState());
     const command = { type: 'buyBay', station: 0 } as const;
     const price = bayPrice(3); // 开局的站下一个停机位的价格
@@ -155,16 +156,16 @@ describe('从状态取提示要用的数', () => {
     expect(failureContext(state, command, 'notEnoughMoney').shortfall).toBe(1);
   });
 
-  it('添飞机没有空停机位：开局的站停机位和飞机一样多，屋顶是中屋顶，上限取自价格表，没放满', () => {
+  it('购买无人机没有空停机位：开局的站停机位和无人机一样多，屋顶是中屋顶，上限取自价格表，没放满', () => {
     const state = withMoney(unlockAll(campaignState()));
     const command = { type: 'buyDrone', station: 0 } as const;
     expectRejected(state, command, 'fleetFull');
     const context = failureContext(state, command, 'fleetFull');
     expect(context).toEqual({ limit: ECONOMY_V1.bayCap.medium, roofFull: false });
-    expect(failureText('fleetFull', context)).toBe('这座站没有空停机位。先加一个停机位，再添飞机。');
+    expect(failureText('fleetFull', context)).toBe(STR.reasons.noFreeBay);
   });
 
-  it('停机位加到上限、飞机补满之后再添飞机：屋顶放满了，提示改成去别的站', () => {
+  it('停机位加到上限、无人机补满之后再购买无人机：屋顶放满了，提示改成停机位已达上限', () => {
     const cap = ECONOMY_V1.bayCap.medium;
     const state = withMoney(quietState());
     for (let i = ECONOMY_V1.baysAtBuild; i < cap; i++) must(state, { type: 'buyBay', station: 0 });
@@ -173,23 +174,23 @@ describe('从状态取提示要用的数', () => {
     expectRejected(state, command, 'fleetFull');
     const context = failureContext(state, command, 'fleetFull');
     expect(context).toEqual({ limit: cap, roofFull: true });
-    expect(failureText('fleetFull', context)).toBe(`这块屋顶最多放 ${cap} 个停机位，已经放满。可以把飞机添到别的站，或者建新站。`);
+    expect(failureText('fleetFull', context)).toBe(fmt(STR.reasons.bayLimitReached, { limit: cap }));
     const bay = { type: 'buyBay', station: 0 } as const;
     expectRejected(state, bay, 'bayLimit');
-    expect(failureText('bayLimit', failureContext(state, bay, 'bayLimit'))).toContain(`最多放 ${cap} 个停机位`);
+    expect(failureText('bayLimit', failureContext(state, bay, 'bayLimit'))).toBe(fmt(STR.reasons.bayLimitReached, { limit: cap }));
   });
 
   it('站数到上限：上限取自价格表', () => {
     expect(failureContext(campaignState(), { type: 'buildStation', roof: 1 }, 'stationLimit')).toEqual({ limit: ECONOMY_V1.maxStations });
   });
 
-  it('价签还没开放：要攒到的余额取自内容表，整句里写的就是它', () => {
+  it('价签还没开放：要攒到的资金取自内容表，整条里写的就是它', () => {
     const state = withMoney(campaignState());
     const command = { type: 'buyBay', station: 0 } as const;
     expectRejected(state, command, 'priceTagsLocked');
     const context = failureContext(state, command, 'priceTagsLocked');
     expect(context).toEqual({ amount: UNLOCKS_V1.priceTagsBalance });
-    expect(failureText('priceTagsLocked', context)).toBe(`要等第一天日结之后、余额到 ¥${UNLOCKS_V1.priceTagsBalance}，才能买东西。`);
+    expect(failureText('priceTagsLocked', context)).toBe(fmt(STR.reasons.priceTagsLocked, { amount: UNLOCKS_V1.priceTagsBalance }));
   });
 
   it('片区没开通：建站的屋顶在哪个片区，就是哪个片区', () => {

@@ -51,7 +51,7 @@ describe('存档格式', () => {
     expect(head).toMatch(
       new RegExp(`^\\{"format":"${SAVE_FORMAT}","version":${SAVE_VERSION},"contentVersion":${CONTENT_VERSION},"savedAt":${WALL},"state":\\{"config":\\{`),
     );
-    expect(SAVE_VERSION).toBe(2);
+    expect(SAVE_VERSION).toBe(3);
     expect(Number.isInteger(CONTENT_VERSION)).toBe(true);
     expect(Number.isInteger(SAVE_VERSION)).toBe(true);
   });
@@ -435,9 +435,9 @@ describe('版本迁移', () => {
       save.version = 0;
     });
 
-  it('正式的迁移表现在只有 1 到 2 一步：版本 1 是最老的，没有更老的版本', () => {
-    expect(Object.keys(MIGRATIONS)).toEqual(['1']);
-    expect(SAVE_VERSION).toBe(2);
+  it('正式的迁移表有 1 到 2、2 到 3 两步：版本 1 是最老的，没有更老的版本', () => {
+    expect(Object.keys(MIGRATIONS)).toEqual(['1', '2']);
+    expect(SAVE_VERSION).toBe(3);
   });
 
   it('没有迁移函数时，版本 0 的存档读不进来', () => {

@@ -93,3 +93,85 @@ describe('停机位', () => {
     });
   });
 });
+
+describe('停机位按屋顶的上限排好位置', () => {
+  /** 三种屋顶和它们的停机位上限：小 6，中 9，大 12。 */
+  const ROOFS: [string, readonly [number, number], number][] = [
+    ['小屋顶', STATION_SIZES.small, 6],
+    ['中屋顶', STATION_SIZES.medium, 9],
+    ['大屋顶', STATION_SIZES.large, 12],
+  ];
+
+  it('买一个停机位，已有的停机位一个都不动，新的一个落在下一个空位', () => {
+    for (const [name, [w, h], limit] of ROOFS) {
+      const final = bayPositions(w, h, limit, limit);
+      for (let count = 1; count < limit; count++) {
+        const before = bayPositions(w, h, count, limit);
+        const after = bayPositions(w, h, count + 1, limit);
+        expect(before, `${name} ${count}`).toHaveLength(count);
+        expect(after, `${name} ${count + 1}`).toHaveLength(count + 1);
+        expect(after.slice(0, count), `${name} ${count}`).toEqual(before);
+        expect(after[count], `${name} ${count}`).toEqual(final[count]);
+      }
+    }
+  });
+
+  it('不管现在有几个停机位，第 k 个都在放满时的位置上', () => {
+    for (const [name, [w, h], limit] of ROOFS) {
+      const final = bayPositions(w, h, limit, limit);
+      for (let count = 1; count <= limit; count++) expect(bayPositions(w, h, count, limit), `${name} ${count}`).toEqual(final.slice(0, count));
+    }
+  });
+
+  it('停机位的边长也不随个数变，买停机位时画出来的格子不会缩小', () => {
+    for (const [name, [, h], limit] of ROOFS) {
+      const size = slotSize(h, limit, limit);
+      for (let count = 1; count <= limit; count++) expect(slotSize(h, count, limit), `${name} ${count}`).toBe(size);
+      expect(size).toBeGreaterThan(0);
+      expect(size).toBeLessThanOrEqual(17);
+    }
+  });
+
+  it('位置都在屋顶之内，互不重叠，放满时整组在屋顶里垂直居中', () => {
+    for (const [name, [w, h], limit] of ROOFS) {
+      const spots = bayPositions(w, h, limit, limit);
+      const half = slotSize(h, limit, limit) / 2;
+      for (const p of spots) {
+        expect(p.x - half, name).toBeGreaterThanOrEqual(0);
+        expect(p.x + half, name).toBeLessThanOrEqual(w);
+        expect(p.y - half, name).toBeGreaterThanOrEqual(0);
+        expect(p.y + half, name).toBeLessThanOrEqual(h);
+      }
+      for (let i = 0; i < spots.length; i++) {
+        for (let j = i + 1; j < spots.length; j++) {
+          const a = spots[i]!;
+          const b = spots[j]!;
+          expect(Math.abs(a.x - b.x) >= 2 * half - 1e-6 || Math.abs(a.y - b.y) >= 2 * half - 1e-6, `${name} ${i} ${j}`).toBe(true);
+        }
+      }
+      const top = Math.min(...spots.map((p) => p.y));
+      const bottom = Math.max(...spots.map((p) => p.y));
+      expect((top + bottom) / 2, name).toBeCloseTo(h / 2, 9);
+    }
+  });
+
+  it('没有上限时和以前一样按个数排，个数比上限多时也按个数排', () => {
+    for (const [w, h] of [STATION_SIZES.small, STATION_SIZES.medium, STATION_SIZES.large]) {
+      expect(bayPositions(w, h, 5)).toEqual(bayPositions(w, h, 5, 5));
+      expect(slotSize(h, 5)).toBe(slotSize(h, 5, 5));
+      // 调试时飞机补得比上限多，停机位也跟着多
+      expect(bayPositions(w, h, 14, 9)).toEqual(bayPositions(w, h, 14));
+      expect(slotSize(h, 14, 9)).toBe(slotSize(h, 14));
+    }
+  });
+
+  it('世界坐标里同样不动：屋顶左上角加固定的局部位置', () => {
+    const [w, h] = STATION_SIZES.medium;
+    const before = slotWorldPositions(1000, 500, w, h, 3, 9);
+    const after = slotWorldPositions(1000, 500, w, h, 4, 9);
+    expect(after.slice(0, 3)).toEqual(before);
+    const final = bayPositions(w, h, 9, 9);
+    expect(after[3]!.x).toBeCloseTo(1000 + final[3]!.x, 9);
+    expect(after[3]!.y).toBeCloseTo(500 + final[3]!.y, 9);
+  });
+});

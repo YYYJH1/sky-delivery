@@ -14,16 +14,20 @@ import { nextFloat, nextRange, poisson } from '../rng.ts';
 import { curveSteps } from '../systems/curve.ts';
 import { addOrder, searchCumulative } from '../systems/orders.ts';
 import type { CampaignState, Order, SimState } from '../types.ts';
+import { currentOpeningMultiplier } from './opening.ts';
 
 /** 各片区一天里每一步的相对来单率，由内容表的控制点算出。 */
 const DISTRICT_CURVES: readonly (readonly number[])[] = DISTRICT_RATES_V1.map((d) => curveSteps(d.curveSeconds, d.curveRate));
 
-/** 一个片区在某一步的来单率（每步的期望来单数）：基础来单率 / 60 × 曲线 × 星级倍数 × 每步秒数。 */
-export function districtLambda(district: number, tickOfDay: number, star: number): number {
+/**
+ * 一个片区在某一步的来单率（每步的期望来单数）：基础来单率 / 60 × 曲线 × 星级倍数 × 开业期倍数 × 每步秒数。
+ * 开业期倍数见 opening.ts，不在开业期里是 1，缺省也是 1。
+ */
+export function districtLambda(district: number, tickOfDay: number, star: number, opening = 1): number {
   const rate = (DISTRICT_RATES_V1[district] as { baseRate: number }).baseRate;
   const curve = (DISTRICT_CURVES[district] as readonly number[])[tickOfDay] as number;
   const multiplier = STAR_MULTIPLIER_V1[Math.min(Math.max(star, 1), STAR_MULTIPLIER_V1.length) - 1] as number;
-  return ((rate / 60) * curve * multiplier) * DT;
+  return ((rate / 60) * curve * multiplier * opening) * DT;
 }
 
 /** 五张开局订单都已出现，并且都有了结果（送达或退单）。 */
@@ -59,7 +63,7 @@ function generateOrder(state: SimState, campaign: CampaignState, district: numbe
  * 经营模式的产生订单阶段。
  * 开局时只有内容表里写定的五张订单，按各自的步出现，不产生随机订单，自动派单关着。
  * 五张都有了结果之后，自动派单打开，同时开始产生随机订单：每个开通的片区按片区编号的顺序，
- * 各抽一个泊松数，来单率由 districtLambda 给出。只用订单随机数流。
+ * 各抽一个泊松数，来单率由 districtLambda 给出，新开通的片区在开业期里来单打折。只用订单随机数流。
  */
 export function campaignArrivals(state: SimState): void {
   const campaign = state.campaign;
@@ -83,7 +87,7 @@ export function campaignArrivals(state: SimState): void {
   const tickOfDay = step % DAY_STEPS;
   campaign.districts.forEach((district, k) => {
     if (!district.open) return;
-    const n = poisson(state.rng.orders, districtLambda(k, tickOfDay, district.star));
+    const n = poisson(state.rng.orders, districtLambda(k, tickOfDay, district.star, currentOpeningMultiplier(state, k)));
     for (let i = 0; i < n; i++) generateOrder(state, campaign, k);
   });
 }

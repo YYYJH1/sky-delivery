@@ -24,7 +24,7 @@ export type {
   SelectRule,
   ZoneRule,
 } from './dispatch/index.ts';
-export { dayOf, peakAt, peakWindow, summaryStep } from './systems/schedule.ts';
+export { dayOf, peakAt, peakInProgress, peakStartingAt, peakWindow, summaryStep } from './systems/schedule.ts';
 export type { PeakName } from './systems/schedule.ts';
 export { averageMetrics, dayMetrics, meanFromDay2, peakSummary, stationStats, windowStats } from './metrics.ts';
 export type {
@@ -44,12 +44,15 @@ export type { RunMetrics } from './run.ts';
 export { CONTENT_VERSION } from '../content/version.ts';
 export { buildCampaignWorld, refreshShops } from './campaign/map.ts';
 export { campaignArrivals, districtLambda } from './campaign/arrivals.ts';
+export { currentOpeningMultiplier, districtOpenDay, openingMultiplier, openingPhase } from './campaign/opening.ts';
+export type { OpeningPhase } from './campaign/opening.ts';
+export { districtPatienceSeconds, orderPatienceSteps, patienceSteps, shortestPatienceSteps } from './campaign/patience.ts';
 export { applyCommand, quoteCommand } from './campaign/commands.ts';
 export type { Command, CommandFailure, CommandQuote, CommandResult, CommandType, PriceKind } from './campaign/commands.ts';
 export { bayCap, bayPrice, dronePrice, gatePrice, stationBasePrice, stationPrice } from './campaign/prices.ts';
 export { fleetOf, inboundTo, nearestFreeStation, stationCount } from './systems/stations.ts';
 export { DISTRICT_NAMES, RULE_NAMES } from './strings.ts';
-// ---- 经营模式：日结、口碑、解锁、两套规矩、高峰小结、便签 ----
+// ---- 经营模式：日结、口碑、解锁、两套策略、高峰小结、便签 ----
 export { settleDay } from './campaign/settle.ts';
 export { dailyPhase } from './campaign/daily.ts';
 export { decideStar, districtNote, keepRule, meetsRule, pct, pickNoteKind, resultStep, starRule, tallyResults, windowOfDay } from './campaign/rating.ts';
@@ -57,6 +60,12 @@ export type { DistrictNote, NoteKind, ResultCounts, StarDecision } from './campa
 export { UNLOCK_KEYS, isUnlocked, lockedUnlocks, refreshUnlocks, ruleLock, ruleOffered, ruleOpen, showKeyOf, unlock } from './campaign/unlocks.ts';
 export { autoPoolAfterDoubleBox, ruleSetAt, ruleSetInForce, splitRuleSets, switchRuleSet } from './campaign/rulesets.ts';
 export { anyStationAtCap, lastPeakTicket, peakRecord, pickExtra, pickMain, pickSentences, recordPeakSummary, sharesOf100 } from './campaign/summary.ts';
+export { districtGoal, goalOf, goalRule, judgeable, liveRows, peakGoals, reachesLine, recordPeakGoals } from './campaign/goals.ts';
+export type { LiveRow, LiveView } from './campaign/goals.ts';
+export { attachBaseline, finishShadow, forwardToShadow, isForwarded, openShadow } from './campaign/shadow.ts';
+export type { BaselineDraft, Shadow } from './campaign/shadow.ts';
+export { gainTotal, incomeStanding, peakGain, peakStanding } from './campaign/records.ts';
+export type { PeakStanding, Standing } from './campaign/records.ts';
 export type { PeakTicket, SentenceInput, Sentences } from './campaign/summary.ts';
 export { TIP_IDS, hasTip, markTipRead, pushTip, tipsPhase, unreadTips } from './campaign/tips.ts';
 export { newShopAt, placeDirection } from './campaign/places.ts';

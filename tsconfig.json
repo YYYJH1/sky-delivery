@@ -2,22 +2,22 @@
   "files": [],
   "references": [
     {
-      "path": "./tsconfig.core.json"
+      "path": "./src/core/tsconfig.json"
     },
     {
       "path": "./tsconfig.node.json"
     },
     {
-      "path": "./tsconfig.save.json"
+      "path": "./src/save/tsconfig.json"
     },
     {
-      "path": "./tsconfig.app.json"
+      "path": "./src/app/tsconfig.json"
     },
     {
-      "path": "./tsconfig.ui.json"
+      "path": "./src/ui/tsconfig.json"
     },
     {
-      "path": "./tsconfig.render.json"
+      "path": "./src/render/tsconfig.json"
     }
   ]
 }

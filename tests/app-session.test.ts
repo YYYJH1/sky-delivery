@@ -159,7 +159,7 @@ describe('自动保存的时机（会话）', () => {
     expect(r.reports.map((x) => x.reason)).toEqual(['hidden']);
   });
 
-  it('玩家暂停时做了操作（买东西、换规矩卡）：没有走步数，也算变过，下一次不可见时保存', async () => {
+  it('玩家暂停时做了操作（买东西、换策略卡）：没有走步数，也算变过，下一次不可见时保存', async () => {
     const r = rig();
     const now = playTo(r, 400);
     r.session.close(WALL + now + 1); // 先存一次，之后没有变化

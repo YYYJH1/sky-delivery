@@ -1,4 +1,4 @@
-// 午晚两套规矩：开通写字楼区时分成两套，天内第 0 步和第 2150 步自动切换，改另一套只保存，自动切换不记换卡。
+// 午晚两套策略：开通写字楼区时分成两套，天内第 0 步和第 2150 步自动切换，改另一套只保存，自动切换不记换卡。
 import { describe, expect, it } from 'vitest';
 import { DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, advance, createRng, createState, isUnlocked, nextInt, peakSummary, ruleSetAt, ruleSetInForce, setRules, splitRuleSets, step } from '../src/core/index.ts';
 import type { PeakName, RuleSet, SimState, StepObserver } from '../src/core/index.ts';
@@ -8,11 +8,11 @@ import { OPENING } from './helpers.ts';
 const EVENING_START = EVENING_WINDOW.start; // 天内第 2150 步
 const NOON_START = NOON_WINDOW.start; // 天内第 600 步
 
-// 经营模式的调度台里没有「一趟送一单」（内容表 rules_v1），换卡的命令只认表里的卡，所以午高峰这一套的「一趟送几单」用 same
+// 经营模式的调度台里没有「单独配送」（内容表 rules_v1），换卡的命令只认表里的卡，所以午高峰策略的「合单策略」用 same
 const NOON_SET: RuleSet = { select: 'deadline', zone: 'hybrid', pool: 'same' };
 const EVENING_SET: RuleSet = { select: 'roundtrip', zone: 'strict', pool: 'any' };
 
-/** 老街三星，开通写字楼区，两套规矩都是开局的 fifo、global、single。 */
+/** 老街三星，开通写字楼区，两套策略都是开局的 fifo、global、single。 */
 function splitState(): SimState {
   const state = withMoney(quietState());
   campaignOf(state).districts[0]!.star = 3;
@@ -77,7 +77,7 @@ describe('开通写字楼区之前只有一套', () => {
   });
 });
 
-describe('开通写字楼区时分成两套，都以当时的规矩为初值', () => {
+describe('开通写字楼区时分成两套，都以当时的策略为初值', () => {
   it('开通的那一刻，两套都等于当时的 state.rules，并开放午晚两套', () => {
     const state = withMoney(quietState());
     campaignOf(state).districts[0]!.star = 3;
@@ -93,7 +93,7 @@ describe('开通写字楼区时分成两套，都以当时的规矩为初值', (
     expect(sets(state).noon).not.toBe(state.rules);
   });
 
-  it('晚高峰中途开通也一样：两套都以当时生效的规矩为初值', () => {
+  it('晚高峰中途开通也一样：两套都以当时生效的策略为初值', () => {
     const state = withMoney(quietState());
     campaignOf(state).districts[0]!.star = 3;
     advance(state, 2400);
@@ -159,10 +159,10 @@ describe('切换：天内第 0 步换成午高峰的一套，第 2150 步换成�
     }
   });
 
-  it('自动切换不记入换卡记录：换卡记录里只有玩家换的，小结里「这一场中途换过规矩」的判断不受影响', () => {
+  it('自动切换不记入换卡记录：换卡记录里只有玩家换的，小结里「这一场中途换过策略」的判断不受影响', () => {
     const state = configured();
     // configured 里指定了另一套（晚高峰一套）和现在生效的一套（午高峰一套）：午高峰那套是立即生效的，记了换卡，
-    // 开局的「一趟送几单」是 single，午高峰那套换成 same 也是一次换卡
+    // 开局的「合单策略」是 single，午高峰那套换成 same 也是一次换卡
     const mine = state.stats.ruleChanges.map((c) => [c.column, c.to]);
     expect(mine).toEqual([['select', 'deadline'], ['zone', 'hybrid'], ['pool', 'same']]);
     advance(state, 2 * DAY_STEPS);
@@ -225,7 +225,7 @@ describe('改哪一套：指定的正好是现在生效的那一套，立即生�
     expect(state.stats.ruleChanges.length).toBe(changes);
   });
 
-  it('指定的一套不存在：unknownTarget；规矩卡不存在：unknownRule；没开放的卡：ruleLocked，状态都不变', () => {
+  it('指定的一套不存在：unknownTarget；策略卡不存在：unknownRule；没开放的卡：ruleLocked，状态都不变', () => {
     const state = splitState();
     expectRejected(state, { type: 'setRules', rules: { select: 'deadline' }, peak: 'night' as never }, 'unknownTarget');
     expectRejected(state, { type: 'setRules', rules: { select: 'nope' }, peak: 'noon' }, 'unknownRule');
@@ -238,7 +238,7 @@ describe('改哪一套：指定的正好是现在生效的那一套，立即生�
 });
 
 describe('第 2150 步和第 600 步的边界：换卡的步严格大于高峰开始的那一步才算中途', () => {
-  /** 在状态推进到第 at 步时执行命令，再跑到小结之后，返回两场小结的「中途换过规矩」。 */
+  /** 在状态推进到第 at 步时执行命令，再跑到小结之后，返回两场小结的「中途换过策略」。 */
   function midPeak(at: number, command: Parameters<typeof must>[1]): { noon: boolean; evening: boolean } {
     const state = configured();
     state.stats.ruleChanges.length = 0;
@@ -289,7 +289,7 @@ describe('第 2150 步和第 600 步的边界：换卡的步严格大于高峰�
 });
 
 describe('买双层货箱时两套都换', () => {
-  it('两套里「一趟送一单」都换成「顺路的一起送」，不记换卡；已经不是「一趟送一单」的一套不动', () => {
+  it('两套里「单独配送」都换成「顺路合并」，不记换卡；已经不是「单独配送」的一套不动', () => {
     const state = splitState();
     must(state, { type: 'setRules', rules: { pool: 'same' }, peak: 'noon' });
     state.stats.ruleChanges.length = 0;
@@ -304,7 +304,7 @@ describe('买双层货箱时两套都换', () => {
 });
 
 describe('不变量：分开之后 state.rules 始终等于现在生效的那一套', () => {
-  it('跑三个游戏日，随机地改两套规矩，每一步之后 state.rules 都等于所处时段的那一套，换卡记录与玩家改现在这套的次数相符', () => {
+  it('跑三个游戏日，随机地改两套策略，每一步之后 state.rules 都等于所处时段的那一套，换卡记录与玩家改现在这套的次数相符', () => {
     const state = configured();
     const rng = createRng(17);
     const pick = <T>(items: readonly T[]): T => items[nextInt(rng, items.length)] as T;

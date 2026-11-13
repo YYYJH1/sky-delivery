@@ -1,10 +1,15 @@
-// 镜头：整张地图转 7° 之后取外接框放进窗口，窗口坐标和世界坐标的换算（缩放、偏移、转角），点中转了角的屋顶，会动的东西的放大倍数。
+// 镜头：把显示的片区转 7° 之后取外接框放进窗口，缩放的上限，镜头从一处缓动到另一处，窗口坐标和世界坐标的换算（缩放、偏移、转角），点中转了角的屋顶，会动的东西的放大倍数。
 import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import {
+  CAMERA_MOVE_MS,
+  MAX_ZOOM,
   bakeScaleFor,
   boardToScreen,
+  cameraMoveAt,
+  easeInOut,
   fitCamera,
+  lerpCamera,
   markerUnits,
   screenPointInWorldRect,
   screenToBoard,
@@ -14,9 +19,10 @@ import {
   worldRectToScreen,
   worldToScreen,
 } from '../src/render/camera.ts';
-import type { Camera } from '../src/render/camera.ts';
+import type { Camera, CameraMove } from '../src/render/camera.ts';
+import { unionRect } from '../src/render/geometry.ts';
 import type { Rect } from '../src/render/geometry.ts';
-import { MAP_ANGLE, MAP_MARGIN, planMapBoard } from '../src/render/map-spec.ts';
+import { MAP_ANGLE, MAP_MARGIN, mapRegion, planMapBoard } from '../src/render/map-spec.ts';
 
 const DISTRICTS: Rect[] = MAP_V1.districts.map((d) => ({ x: d.x0, y: d.y0, w: d.x1 - d.x0, h: d.y1 - d.y0 }));
 const PLAN = planMapBoard(DISTRICTS);
@@ -53,6 +59,27 @@ describe('整张地图的画板', () => {
 
   it('没有片区时报错', () => {
     expect(() => planMapBoard([])).toThrow(/district/);
+    expect(() => mapRegion([])).toThrow(/district/);
+  });
+
+  it('一部分片区的范围：这几个片区的外框加四周的留白，三个都在时就是整张地图的范围', () => {
+    expect(mapRegion(DISTRICTS)).toEqual(PLAN.region);
+    const [old] = DISTRICTS as [Rect, Rect, Rect];
+    expect(mapRegion([old])).toEqual({ x: old.x - MAP_MARGIN, y: old.y - MAP_MARGIN, w: old.w + 2 * MAP_MARGIN, h: old.h + 2 * MAP_MARGIN });
+    // 加上写字楼区：右边和上边伸出去，下边是老街的下边，左边还是老街的左边
+    const office = DISTRICTS[1] as Rect;
+    const both = mapRegion([old, office]);
+    expect(both.x).toBe(old.x - MAP_MARGIN);
+    expect(both.x + both.w).toBe(office.x + office.w + MAP_MARGIN);
+    expect(both.y).toBe(Math.min(old.y, office.y) - MAP_MARGIN);
+    expect(both.y + both.h).toBe(Math.max(old.y + old.h, office.y + office.h) + MAP_MARGIN);
+  });
+
+  it('盖住两块矩形的最小矩形', () => {
+    expect(unionRect({ x: 0, y: 0, w: 10, h: 10 }, { x: 5, y: -4, w: 10, h: 8 })).toEqual({ x: 0, y: -4, w: 15, h: 14 });
+    const r: Rect = { x: 3, y: 4, w: 5, h: 6 };
+    expect(unionRect(r, r)).toEqual(r);
+    expect(unionRect({ x: 0, y: 0, w: 100, h: 100 }, { x: 10, y: 10, w: 5, h: 5 })).toEqual({ x: 0, y: 0, w: 100, h: 100 });
   });
 });
 
@@ -130,6 +157,118 @@ describe('把地图放进窗口', () => {
   it('静态层的烘焙倍率是镜头缩放乘设备像素比', () => {
     const cam = fitCamera(PLAN.content, 1920, 1080, INSETS, 2);
     expect(bakeScaleFor(cam, 2)).toBeCloseTo(cam.scale * 2, 12);
+  });
+});
+
+describe('缩放的上限', () => {
+  const small: Rect = { x: 100, y: 50, w: 600, h: 400 };
+
+  it('范围比窗口小很多时，缩放停在上限，不再放大，范围居中，偏移对齐设备像素', () => {
+    const cam = fitCamera(small, 1920, 1080, INSETS, 1, MAX_ZOOM);
+    expect(cam.scale).toBe(MAX_ZOOM);
+    // 范围的中心落在窗口里去掉上下留白的那一块的中心
+    const center = boardToScreen(cam, small.x + small.w / 2, small.y + small.h / 2);
+    expect(Math.abs(center.x - 960)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(center.y - (INSETS.top + (1080 - INSETS.top - INSETS.bottom) / 2))).toBeLessThanOrEqual(0.5);
+    const cam2 = fitCamera(small, 1920, 1080, INSETS, 2, MAX_ZOOM);
+    expect(cam2.x * 2).toBeCloseTo(Math.round(cam2.x * 2), 9);
+    expect(cam2.y * 2).toBeCloseTo(Math.round(cam2.y * 2), 9);
+  });
+
+  it('不给上限时照旧放大到放得下为止', () => {
+    expect(fitCamera(small, 1920, 1080, INSETS, 1).scale).toBeCloseTo(Math.min(1920 / 600, (1080 - 124) / 400), 9);
+  });
+
+  it('放得下的缩放比上限小时，上限不起作用', () => {
+    const big: Rect = { x: 0, y: 0, w: 2000, h: 1500 };
+    const cam = fitCamera(big, 1920, 1080, INSETS, 1, MAX_ZOOM);
+    expect(cam.scale).toBeCloseTo(Math.min(1920 / 2000, (1080 - 124) / 1500), 9);
+    expect(cam.scale).toBeLessThan(MAX_ZOOM);
+  });
+
+  it('上限是 1：风格切片页面里老街的缩放', () => {
+    expect(MAX_ZOOM).toBe(1);
+  });
+});
+
+describe('镜头的移动', () => {
+  const a: Camera = { scale: 0.8, x: 447, y: 100.5 };
+  const b: Camera = { scale: 0.5, x: 120, y: 144 };
+
+  it('缓动：两头是 0 和 1，中间是 0.5，对称，不倒退，超出范围的进度夹住', () => {
+    expect(easeInOut(0)).toBe(0);
+    expect(easeInOut(1)).toBe(1);
+    expect(easeInOut(0.5)).toBeCloseTo(0.5, 12);
+    expect(easeInOut(-3)).toBe(0);
+    expect(easeInOut(7)).toBe(1);
+    let last = -1;
+    for (let i = 0; i <= 100; i++) {
+      const t = i / 100;
+      const e = easeInOut(t);
+      expect(e).toBeGreaterThanOrEqual(last);
+      expect(easeInOut(1 - t)).toBeCloseTo(1 - e, 12);
+      last = e;
+    }
+    // 起头和收尾都慢：前 10% 的时间走不到 1% 的路
+    expect(easeInOut(0.1)).toBeLessThan(0.01);
+    expect(easeInOut(0.9)).toBeGreaterThan(0.99);
+  });
+
+  it('两个镜头之间插值：两头是这两个镜头，缩放和偏移各自线性变化', () => {
+    expect(lerpCamera(a, b, 0)).toEqual(a);
+    expect(lerpCamera(a, b, 1)).toEqual(b);
+    const m = lerpCamera(a, b, 0.25);
+    expect(m.scale).toBeCloseTo(0.725, 12);
+    expect(m.x).toBeCloseTo(447 + (120 - 447) * 0.25, 12);
+    expect(m.y).toBeCloseTo(100.5 + (144 - 100.5) * 0.25, 12);
+  });
+
+  it('画板上的每个点沿直线从起点的窗口位置挪到终点的窗口位置', () => {
+    const point = { x: 900, y: 700 };
+    const p0 = boardToScreen(a, point.x, point.y);
+    const p1 = boardToScreen(b, point.x, point.y);
+    for (const t of [0.1, 0.37, 0.5, 0.9]) {
+      const p = boardToScreen(lerpCamera(a, b, t), point.x, point.y);
+      expect(p.x).toBeCloseTo(p0.x + (p1.x - p0.x) * t, 9);
+      expect(p.y).toBeCloseTo(p0.y + (p1.y - p0.y) * t, 9);
+    }
+  });
+
+  const move: CameraMove = { from: a, to: b, startMs: 5000, durationMs: CAMERA_MOVE_MS };
+
+  it('移动大约 0.8 秒', () => {
+    expect(CAMERA_MOVE_MS).toBeGreaterThanOrEqual(700);
+    expect(CAMERA_MOVE_MS).toBeLessThanOrEqual(900);
+  });
+
+  it('开始之前和刚开始时是起点的镜头，没有结束', () => {
+    expect(cameraMoveAt(move, 4000)).toEqual({ camera: a, done: false });
+    expect(cameraMoveAt(move, 5000)).toEqual({ camera: a, done: false });
+  });
+
+  it('结束时给的就是终点的镜头本身，之后一直是它', () => {
+    const end = cameraMoveAt(move, 5000 + CAMERA_MOVE_MS);
+    expect(end.done).toBe(true);
+    expect(end.camera).toBe(b);
+    expect(cameraMoveAt(move, 99999).camera).toBe(b);
+  });
+
+  it('过程中：缩放单调从 0.8 降到 0.5，正中间正好在两头的中点', () => {
+    let last = a.scale;
+    for (let ms = 0; ms < CAMERA_MOVE_MS; ms += 16) {
+      const at = cameraMoveAt(move, 5000 + ms);
+      expect(at.done).toBe(false);
+      expect(at.camera.scale).toBeLessThanOrEqual(last + 1e-12);
+      expect(at.camera.scale).toBeGreaterThanOrEqual(b.scale);
+      last = at.camera.scale;
+    }
+    const half = cameraMoveAt(move, 5000 + CAMERA_MOVE_MS / 2).camera;
+    expect(half.scale).toBeCloseTo((a.scale + b.scale) / 2, 12);
+    expect(half.x).toBeCloseTo((a.x + b.x) / 2, 12);
+  });
+
+  it('时长为 0 时一步到位', () => {
+    expect(cameraMoveAt({ ...move, durationMs: 0 }, 5000)).toEqual({ camera: b, done: true });
   });
 });
 
@@ -245,7 +384,7 @@ describe('会动的东西和字的放大倍数', () => {
     for (const v of Object.values(markerUnits(2.5))) expect(v).toBe(1);
   });
 
-  it('整张地图放进窗口时缩放小，倍数大于 1，放大之后在窗口里不比目标尺寸小', () => {
+  it('镜头缩放小于 1 时倍数大于 1，放大之后在窗口里不比目标尺寸小', () => {
     const z = 0.48;
     const u = markerUnits(z);
     for (const v of Object.values(u)) expect(v).toBeGreaterThan(1);

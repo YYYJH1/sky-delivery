@@ -1,5 +1,6 @@
 // 当天原价退回：飞机、停机位、站点。每一种退回的条件，退回后的余额和数量，已退回的飞机和站点不再参与任何计算。
 import { describe, expect, it } from 'vitest';
+import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import {
   DAY_STEPS,
   DroneState,
@@ -14,6 +15,10 @@ import {
 } from '../src/core/index.ts';
 import type { SimState } from '../src/core/index.ts';
 import { campaignOf, expectRejected, liveDrones, must, quietState, roofWhere, withMoney } from './campaign-helpers.ts';
+
+/** 价格表里第 n 个停机位（n 不小于 3）的价格，第 3 架飞机的价格。 */
+const bayAt = (n: number): number => Math.round(ECONOMY_V1.bayBase * ECONOMY_V1.bayGrowth ** (n - 3));
+const THIRD_DRONE = ECONOMY_V1.droneBase;
 
 const OFFICE_ROOF = roofWhere((r) => r.district === 1);
 const OLD_SMALL = roofWhere((r) => r.district === 0 && r.size === 'small');
@@ -34,12 +39,12 @@ describe('退回飞机', () => {
     const state = withMoney(quietState(), 1000);
     const id = withThirdDrone(state);
     const campaign = campaignOf(state);
-    expect(campaign.money).toBe(1000 - 140 - 100);
-    expect(quoteCommand(state, { type: 'refundDrone', drone: id })).toEqual({ ok: true, reason: null, kind: 'refund', price: 100 });
+    expect(campaign.money).toBe(1000 - bayAt(3) - THIRD_DRONE);
+    expect(quoteCommand(state, { type: 'refundDrone', drone: id })).toEqual({ ok: true, reason: null, kind: 'refund', price: THIRD_DRONE });
     expect(must(state, { type: 'refundDrone', drone: id })).toBe(id);
-    expect(campaign.money).toBe(1000 - 140);
-    expect(campaign.refunded).toBe(100);
-    expect(campaign.spent).toBe(240);
+    expect(campaign.money).toBe(1000 - bayAt(3));
+    expect(campaign.refunded).toBe(THIRD_DRONE);
+    expect(campaign.spent).toBe(bayAt(3) + THIRD_DRONE);
     const drone = state.drones[id] as { removed: boolean; station: number };
     expect(drone.removed).toBe(true);
     expect(drone.station).toBe(-1);
@@ -49,11 +54,11 @@ describe('退回飞机', () => {
     expect(state.drones.length).toBe(3); // 编号不回收，不从数组里删除
   });
 
-  it('退回之后再买同一座站的飞机，价格按退回之后的飞机数算：还是第 3 架的 100', () => {
+  it('退回之后再买同一座站的飞机，价格按退回之后的飞机数算：还是第 3 架的价格', () => {
     const state = withMoney(quietState(), 1000);
     const id = withThirdDrone(state);
     must(state, { type: 'refundDrone', drone: id });
-    expect(quoteCommand(state, { type: 'buyDrone', station: 0 }).price).toBe(100);
+    expect(quoteCommand(state, { type: 'buyDrone', station: 0 }).price).toBe(THIRD_DRONE);
     const next = must(state, { type: 'buyDrone', station: 0 });
     expect(next).toBe(id + 1); // 新飞机用新的编号
   });
@@ -113,20 +118,20 @@ describe('退回飞机', () => {
 });
 
 describe('退回停机位', () => {
-  it('当天买的停机位可以按原价退回，后买的先退：先退第 4 个（164），再退第 3 个（140）', () => {
+  it('当天买的停机位可以按原价退回，后买的先退：先退第 4 个，再退第 3 个', () => {
     const state = withMoney(quietState(), 1000);
-    must(state, { type: 'buyBay', station: 0 }); // 140
-    must(state, { type: 'buyBay', station: 0 }); // 164
+    must(state, { type: 'buyBay', station: 0 }); // 第 3 个
+    must(state, { type: 'buyBay', station: 0 }); // 第 4 个
     const campaign = campaignOf(state);
-    expect(campaign.money).toBe(1000 - 140 - 164);
-    expect(quoteCommand(state, { type: 'refundBay', station: 0 })).toEqual({ ok: true, reason: null, kind: 'refund', price: 164 });
+    expect(campaign.money).toBe(1000 - bayAt(3) - bayAt(4));
+    expect(quoteCommand(state, { type: 'refundBay', station: 0 })).toEqual({ ok: true, reason: null, kind: 'refund', price: bayAt(4) });
     must(state, { type: 'refundBay', station: 0 });
-    expect(campaign.money).toBe(1000 - 140);
+    expect(campaign.money).toBe(1000 - bayAt(3));
     expect((state.stations[0] as { bays: number }).bays).toBe(3);
     must(state, { type: 'refundBay', station: 0 });
     expect(campaign.money).toBe(1000);
     expect((state.stations[0] as { bays: number }).bays).toBe(2);
-    expect(campaign.refunded).toBe(304);
+    expect(campaign.refunded).toBe(bayAt(3) + bayAt(4));
     expectRejected(state, { type: 'refundBay', station: 0 }, 'notBoughtToday'); // 开局自带的 2 个不能退
   });
 

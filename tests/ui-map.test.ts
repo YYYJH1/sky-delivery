@@ -2,10 +2,11 @@
 // 画出来的东西（PixiJS 的精灵）在浏览器里，这里测它们依据的数据：位置从哪里来，点得中的是不是画出来的那个。
 import { describe, expect, it } from 'vitest';
 import { BASE_COLORS, STATION_COLOR_NAMES } from '../src/content/palette.ts';
+import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { OrderStatus, addOrder, advance, applyCommand, refreshShops } from '../src/core/index.ts';
 import type { SimState } from '../src/core/index.ts';
-import { boardToScreen, worldRectToScreen, worldToScreen } from '../src/render/camera.ts';
+import { MAX_ZOOM, boardToScreen, fitCamera, worldRectToScreen, worldToScreen } from '../src/render/camera.ts';
 import { STATION_SIZES, generateCity } from '../src/render/city.ts';
 import { stationColor, themeFor } from '../src/render/look.ts';
 import { HELIPAD_NEAR, citySpecFromMap } from '../src/render/map-spec.ts';
@@ -18,31 +19,43 @@ import {
   CARD_GAP,
   CARD_HEIGHT,
   CARD_WIDTH,
+  LEADER_MIN_GAP,
+  ROOF_LABEL_RINGS,
   TOOLTIP_OFFSET,
   cardPlacement,
   estimateWidth,
   layoutRoofLabels,
+  leaderBetween,
   overlapArea,
   placeLabels,
   pointInRect,
+  rectGap,
   rectsOverlap,
   roofLabelFontPx,
   tooltipPlacement,
 } from '../src/ui/map-layout.ts';
 import type { LabelRequest, Rect } from '../src/ui/map-layout.ts';
 import {
+  BOARD_STRIP,
+  DISTRICT_RECTS,
+  SIDE_MARGIN,
   MAP_PLAN,
   cameraFor,
+  contentFor,
   districtAnchor,
+  bayLimitOf,
   districtBoxes,
+  districtLabelRects,
+  framedOf,
   insetsFor,
   roofBoxes,
   roofIndexOfStation,
+  sameFramed,
   shopIsOpen,
   stationAnchor,
   stationBoxes,
 } from '../src/ui/map-state.ts';
-import { candidateRoofs, roofLines } from '../src/ui/roofs.ts';
+import { candidateRoofs, roofLabelLines, roofLines } from '../src/ui/roofs.ts';
 import { windowViewFor } from '../src/ui/state.ts';
 import { campaignOf, campaignState, must, quietState, unlockAll, withMoney } from './campaign-helpers.ts';
 
@@ -122,6 +135,201 @@ describe('地图的镜头', () => {
     const a = cameraFor({ width: 960, height: 540, dpr: 1, uiScale: 0.5 });
     const b = cameraFor({ width: 1920, height: 1080, dpr: 1, uiScale: 1 });
     expect(b.scale / a.scale).toBeCloseTo(2, 9);
+  });
+});
+
+describe('镜头只框已经显示的片区', () => {
+  const VIEW_1080 = { width: 1920, height: 1080, dpr: 1, uiScale: 1 };
+  const OLD_ONLY = framedOf(['open', 'hidden', 'hidden']);
+  const OLD_OFFICE = framedOf(['open', 'faded', 'hidden']);
+  const ALL = framedOf(['open', 'open', 'faded']);
+
+  it('淡画的和开通的片区都算已经显示，还没显示的不算', () => {
+    expect(framedOf(['open', 'hidden', 'hidden'])).toEqual([true, false, false]);
+    expect(framedOf(['open', 'faded', 'hidden'])).toEqual([true, true, false]);
+    expect(framedOf(['open', 'open', 'open'])).toEqual([true, true, true]);
+    expect(framedOf(['faded', 'hidden', 'hidden'])).toEqual([true, false, false]);
+    // 没给的片区按还没显示算
+    expect(framedOf(['open'])).toEqual([true, false, false]);
+  });
+
+  it('一个片区都没有显示时框第一个片区，镜头不会没有东西可框', () => {
+    expect(framedOf(['hidden', 'hidden', 'hidden'])).toEqual([true, false, false]);
+    expect(framedOf([])).toEqual([true, false, false]);
+  });
+
+  it('比较两组框住的片区', () => {
+    expect(sameFramed(OLD_ONLY, [true, false, false])).toBe(true);
+    expect(sameFramed(OLD_ONLY, OLD_OFFICE)).toBe(false);
+    expect(sameFramed(ALL, [true, true, true])).toBe(true);
+  });
+
+  it('框住的范围：三个片区都框时是整块画板，少框一个片区范围变小，范围里包着框住的片区', () => {
+    const all = contentFor(ALL);
+    expect(all.x).toBeCloseTo(0, 6);
+    expect(all.y).toBeCloseTo(0, 6);
+    expect(all.w).toBeCloseTo(MAP_PLAN.content.w, 6);
+    expect(all.h).toBeCloseTo(MAP_PLAN.content.h, 6);
+    expect(contentFor()).toEqual(all);
+    const two = contentFor(OLD_OFFICE);
+    const one = contentFor(OLD_ONLY);
+    expect(two.w * two.h).toBeLessThan(all.w * all.h);
+    expect(one.w * one.h).toBeLessThan(two.w * two.h);
+    // 画板上的范围一层包着一层：只框老街的在老街加写字楼区里面，它又在整块画板里面
+    const inside = (a: Rect, b: Rect): boolean => a.x >= b.x - 1e-6 && a.y >= b.y - 1e-6 && a.x + a.w <= b.x + b.w + 1e-6 && a.y + a.h <= b.y + b.h + 1e-6;
+    expect(inside(two, all)).toBe(true);
+    expect(inside(one, two)).toBe(true);
+    // 每个框住的片区转了角之后的四个角都在范围里
+    DISTRICT_RECTS.forEach((d, i) => {
+      if (!OLD_OFFICE[i]) return;
+      for (const [x, y] of [[d.x, d.y], [d.x + d.w, d.y], [d.x, d.y + d.h], [d.x + d.w, d.y + d.h]] as const) {
+        const p = MAP_PLAN.board.toBoard(x, y);
+        expect(p.x).toBeGreaterThanOrEqual(two.x - 1e-6);
+        expect(p.x).toBeLessThanOrEqual(two.x + two.w + 1e-6);
+        expect(p.y).toBeGreaterThanOrEqual(two.y - 1e-6);
+        expect(p.y).toBeLessThanOrEqual(two.y + two.h + 1e-6);
+      }
+    });
+  });
+
+  it('1920×1080：开局只有老街时放得最大，加上写字楼区缩小，三个片区都显示时和以前整张地图放进窗口一样', () => {
+    const one = cameraFor(VIEW_1080, OLD_ONLY);
+    const two = cameraFor(VIEW_1080, OLD_OFFICE);
+    const all = cameraFor(VIEW_1080, ALL);
+    expect(one.scale).toBeGreaterThan(two.scale);
+    expect(two.scale).toBeGreaterThan(all.scale);
+    // 老街放大到接近风格切片里的缩放 1，三个片区时缩放不到 0.5
+    expect(one.scale).toBeGreaterThan(0.75);
+    expect(one.scale).toBeLessThanOrEqual(1);
+    expect(all.scale).toBeCloseTo((1080 - 124) / MAP_PLAN.board.height, 9);
+    expect(all).toEqual(cameraFor(VIEW_1080));
+  });
+
+  it('框住的片区转了角之后的四个角都在窗口里，顶部和底部的界面物件下面不压着', () => {
+    for (const framed of [OLD_ONLY, OLD_OFFICE, ALL]) {
+      for (const [w, h, dpr] of [[1920, 1080, 1], [1280, 720, 1], [2560, 1080, 1], [1000, 1000, 1], [3840, 2160, 2], [1440, 900, 2]] as const) {
+        const view = windowViewFor(w, h);
+        const insets = insetsFor(view.scale);
+        const camera = cameraFor({ width: view.width, height: view.height, dpr, uiScale: view.scale }, framed);
+        const tol = 1 / dpr + 1e-6;
+        DISTRICT_RECTS.forEach((d, i) => {
+          if (!framed[i]) return;
+          for (const [x, y] of [[d.x, d.y], [d.x + d.w, d.y], [d.x, d.y + d.h], [d.x + d.w, d.y + d.h]] as const) {
+            const p = worldToScreen(MAP_PLAN.board, camera, x, y);
+            const label = `${framed.join()} ${w}x${h}`;
+            expect(p.x, label).toBeGreaterThanOrEqual(-tol);
+            expect(p.x, label).toBeLessThanOrEqual(view.width + tol);
+            expect(p.y, label).toBeGreaterThanOrEqual(insets.top - tol);
+            expect(p.y, label).toBeLessThanOrEqual(view.height - insets.bottom + tol);
+          }
+        });
+      }
+    }
+  });
+
+  it('老街加写字楼区：右边不压到调度台下面，左边留出和别的界面物件一样的空，几种窗口大小都一样', () => {
+    for (const [w, h] of [[1920, 1080], [1280, 720], [1536, 864], [2560, 1440], [1600, 1000]] as const) {
+      const view = windowViewFor(w, h);
+      const camera = cameraFor({ width: view.width, height: view.height, dpr: 1, uiScale: view.scale }, OLD_OFFICE);
+      let left = Number.POSITIVE_INFINITY;
+      let right = Number.NEGATIVE_INFINITY;
+      DISTRICT_RECTS.forEach((d, i) => {
+        if (!OLD_OFFICE[i]) return;
+        for (const [x, y] of [[d.x, d.y], [d.x + d.w, d.y], [d.x, d.y + d.h], [d.x + d.w, d.y + d.h]] as const) {
+          const p = worldToScreen(MAP_PLAN.board, camera, x, y);
+          left = Math.min(left, p.x);
+          right = Math.max(right, p.x);
+        }
+      });
+      expect(right, `${w}x${h}`).toBeLessThanOrEqual(view.width - BOARD_STRIP * view.scale + 1e-6);
+      // 片区外框的四个角是街区往里的，范围的留白还在外面，所以角离窗口边比 SIDE_MARGIN 远
+      expect(left, `${w}x${h}`).toBeGreaterThanOrEqual(SIDE_MARGIN * view.scale - 1e-6);
+    }
+  });
+
+  it('只有老街时不让位，老街在窗口正中；三个片区都显示时也不让位，和整张地图放进窗口一样', () => {
+    for (const [w, h] of [[1920, 1080], [1280, 720], [2560, 1440]] as const) {
+      const view = windowViewFor(w, h);
+      const geometry = { width: view.width, height: view.height, dpr: 1, uiScale: view.scale };
+      const one = cameraFor(geometry, OLD_ONLY);
+      const content = contentFor(OLD_ONLY);
+      expect(one.x + (content.x + content.w / 2) * one.scale, `${w}x${h}`).toBeCloseTo(view.width / 2, 0);
+      const all = cameraFor(geometry, ALL);
+      const whole = fitCamera(MAP_PLAN.content, view.width, view.height, insetsFor(view.scale), 1, MAX_ZOOM * view.scale);
+      expect(all.scale, `${w}x${h}`).toBeCloseTo(whole.scale, 9);
+      expect(all.x, `${w}x${h}`).toBeCloseTo(whole.x, 9);
+      expect(all.y, `${w}x${h}`).toBeCloseTo(whole.y, 9);
+    }
+  });
+
+  it('让出调度台的位置只是缩小一点、往左挪一点：缩放比整个窗口放时略小，框住的片区仍然都在窗口里', () => {
+    const geometry = { width: 1920, height: 1080, dpr: 1, uiScale: 1 };
+    const narrow = cameraFor(geometry, OLD_OFFICE);
+    const whole = fitCamera(contentFor(OLD_OFFICE), 1920, 1080, insetsFor(1), 1, MAX_ZOOM);
+    expect(narrow.scale).toBeLessThan(whole.scale);
+    expect(narrow.scale).toBeGreaterThan(0.95 * whole.scale);
+    expect(narrow.x).toBeLessThan(whole.x);
+    // 偏移还是对齐设备像素
+    const sharp = cameraFor({ width: 1536, height: 864, dpr: 2, uiScale: 0.8 }, OLD_OFFICE);
+    expect(sharp.x * 2).toBeCloseTo(Math.round(sharp.x * 2), 9);
+  });
+
+  it('缩放不超过 1，窗口比 1920×1080 大时上限跟着界面物件的缩放走', () => {
+    for (const [w, h] of [[1920, 1080], [2560, 1440], [1920, 1900], [1280, 720], [3840, 2160]] as const) {
+      const view = windowViewFor(w, h);
+      const camera = cameraFor({ width: view.width, height: view.height, dpr: 1, uiScale: view.scale }, OLD_ONLY);
+      expect(camera.scale, `${w}x${h}`).toBeLessThanOrEqual(view.scale + 1e-9);
+    }
+    // 又高又窄之外的窗口：老街放得下的缩放超过 1 时停在 1
+    const tall = windowViewFor(1920, 1900);
+    expect(cameraFor({ width: tall.width, height: tall.height, dpr: 1, uiScale: tall.scale }, OLD_ONLY).scale).toBe(1);
+    // 同样的窗口里三个片区都显示时不受上限影响
+    expect(cameraFor({ width: tall.width, height: tall.height, dpr: 1, uiScale: tall.scale }, ALL).scale).toBeLessThan(1);
+  });
+
+  it('偏移对齐设备像素：框住的片区不同，镜头照样对齐', () => {
+    for (const framed of [OLD_ONLY, OLD_OFFICE, ALL]) {
+      const camera = cameraFor({ width: 1536, height: 864, dpr: 2, uiScale: 0.8 }, framed);
+      expect(camera.x * 2).toBeCloseTo(Math.round(camera.x * 2), 9);
+      expect(camera.y * 2).toBeCloseTo(Math.round(camera.y * 2), 9);
+    }
+  });
+});
+
+describe('片区名在地图上占的地方', () => {
+  it('每个已经显示的片区一块，中心在城市里记的位置上，字多的片区宽，还没显示的片区没有', () => {
+    const all = districtLabelRects(CITY.labels, ['open', 'open', 'open']);
+    expect(all).toHaveLength(CITY.labels.length);
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    CITY.labels.forEach((label, i) => {
+      const r = all[i]!;
+      expect(r.x + r.w / 2).toBeCloseTo(label.x, 9);
+      expect(r.y).toBeLessThan(label.y);
+      expect(r.y + r.h).toBeGreaterThan(label.y);
+    });
+    const widthOf = (district: number): number => all[CITY.labels.findIndex((l) => l.district === district)]!.w;
+    expect(widthOf(1)).toBeGreaterThan(widthOf(0));
+    const some = districtLabelRects(CITY.labels, ['open', 'faded', 'hidden']);
+    expect(some).toHaveLength(CITY.labels.filter((l) => l.district !== 2).length);
+    expect(districtLabelRects(CITY.labels, [])).toEqual([]);
+  });
+});
+
+describe('站所在屋顶的停机位上限', () => {
+  it('取自屋顶的大小：开局的站在中屋顶上是 9，新建的站按它的屋顶，小 6，中 9，大 12', () => {
+    const state = withMoney(unlockAll(campaignState()));
+    expect(bayLimitOf(state, 0)).toBe(ECONOMY_V1.bayCap.medium);
+    const large = must(state, { type: 'buildStation', roof: 4 });
+    const small = must(state, { type: 'buildStation', roof: 1 });
+    expect(bayLimitOf(state, large)).toBe(ECONOMY_V1.bayCap.large);
+    expect(bayLimitOf(state, small)).toBe(ECONOMY_V1.bayCap.small);
+    expect([ECONOMY_V1.bayCap.small, ECONOMY_V1.bayCap.medium, ECONOMY_V1.bayCap.large]).toEqual([6, 9, 12]);
+  });
+
+  it('沙盒模式的站没有屋顶：没有上限，按现有的停机位排', () => {
+    const state = quietState();
+    state.campaign = null;
+    expect(bayLimitOf(state, 0)).toBeNull();
   });
 });
 
@@ -474,7 +682,7 @@ describe('一行字大约多宽', () => {
   });
 
   it('字号放大，宽度跟着等比放大', () => {
-    expect(estimateWidth('飞到本片区的店平均 1.2 秒', 20)).toBeCloseTo(2 * estimateWidth('飞到本片区的店平均 1.2 秒', 10), 9);
+    expect(estimateWidth('至本片区店铺平均 1.2 秒', 20)).toBeCloseTo(2 * estimateWidth('至本片区店铺平均 1.2 秒', 10), 9);
   });
 });
 
@@ -512,11 +720,173 @@ describe('候选屋顶的文字', () => {
     }
   });
 
+  it('三个片区的屋顶都在选：十五块，文字都不压住屋顶、站和别的文字，不钻出范围，离开屋顶的都有细线', () => {
+    const state = unlockAll(campaignState());
+    for (const d of campaignOf(state).districts) d.open = true;
+    const candidates = candidateRoofs(state);
+    expect(candidates).toHaveLength(15);
+    const camera = cameraFor(VIEW);
+    const boxes = roofBoxes(candidates, ROOFS);
+    const inputs = boxes.map((b) => {
+      const c = candidates.find((x) => x.roof === b.roof)!;
+      return { roof: b.roof, box: worldRectToScreen(MAP_PLAN.board, camera, b.rect), lines: roofLabelLines(c), ok: c.ok };
+    });
+    const stations = stationBoxes(state, ROOFS).map((b) => worldRectToScreen(MAP_PLAN.board, camera, b.rect));
+    const placed = layoutRoofLabels(inputs, stations, bounds, 15);
+    expect(placed).toHaveLength(15);
+    for (let i = 0; i < placed.length; i++) {
+      const p = placed[i]!;
+      expect([1, 3], `屋顶 ${p.roof}`).toContain(p.lines.length);
+      expect(p.x).toBeGreaterThanOrEqual(bounds.x);
+      expect(p.x + p.w).toBeLessThanOrEqual(bounds.x + bounds.w);
+      expect(p.y).toBeGreaterThanOrEqual(bounds.y);
+      expect(p.y + p.h).toBeLessThanOrEqual(bounds.y + bounds.h);
+      for (let j = i + 1; j < placed.length; j++) expect(rectsOverlap(p, placed[j]!), `文字 ${p.roof} 和 ${placed[j]!.roof}`).toBe(false);
+      for (const input of inputs) expect(rectsOverlap(p, input.box), `文字 ${p.roof} 压着屋顶 ${input.roof}`).toBe(false);
+      for (const s of stations) expect(rectsOverlap(p, s), `文字 ${p.roof} 压着站`).toBe(false);
+      const input = inputs.find((x) => x.roof === p.roof)!;
+      // 紧贴着屋顶不画线，离开屋顶超过 LEADER_MIN_GAP 就有线，线的两头在屋顶和文字的边上
+      const gap = rectGap(input.box, p);
+      if (gap <= LEADER_MIN_GAP) expect(p.leader, `屋顶 ${p.roof}`).toBeNull();
+      else {
+        expect(p.leader, `屋顶 ${p.roof}`).not.toBeNull();
+        expect(pointInRect(input.box, p.leader!.x1, p.leader!.y1, 0.001)).toBe(true);
+        expect(pointInRect(p, p.leader!.x2, p.leader!.y2, 0.001)).toBe(true);
+      }
+    }
+  });
+
   it('文字块的大小随字数和字号：宽度是最宽一行加左右内边距，高度是行数乘行高加上下内边距', () => {
     const [p] = layoutRoofLabels([{ roof: 7, box: { x: 400, y: 400, w: 60, h: 40 }, lines: ['一二三四五', '一二'], ok: true }], [], bounds, 15);
     expect(p!.w).toBeCloseTo(75 + 14, 9);
     expect(p!.h).toBeCloseTo(2 * 15 * 1.4 + 10, 9);
     expect(p!.ok).toBe(true);
+  });
+});
+
+describe('文字离屋顶远时连一条细线', () => {
+  const roof: Rect = { x: 400, y: 300, w: 100, h: 80 };
+
+  it('两块矩形之间最近的距离：相交和贴边为 0，斜着隔开是对角线的距离', () => {
+    expect(rectGap(roof, { x: 450, y: 350, w: 20, h: 20 })).toBe(0);
+    expect(rectGap(roof, { x: 500, y: 300, w: 20, h: 20 })).toBe(0);
+    expect(rectGap(roof, { x: 530, y: 300, w: 20, h: 20 })).toBe(30);
+    expect(rectGap(roof, { x: 530, y: 420, w: 20, h: 20 })).toBe(50);
+  });
+
+  it('紧贴着屋顶（隔 6 个像素）不画线，隔得远了才画', () => {
+    expect(leaderBetween(roof, { x: 400, y: 386, w: 200, h: 60 })).toBeNull();
+    expect(leaderBetween(roof, { x: 400, y: 380 + LEADER_MIN_GAP, w: 200, h: 60 })).toBeNull();
+    expect(leaderBetween(roof, { x: 400, y: 380 + LEADER_MIN_GAP + 1, w: 200, h: 60 })).not.toBeNull();
+  });
+
+  it('线从屋顶的边连到文字的边：文字在屋顶正下方时是一条竖线', () => {
+    const label: Rect = { x: 380, y: 480, w: 140, h: 60 };
+    const leader = leaderBetween(roof, label)!;
+    expect(leader.x1).toBe(leader.x2);
+    expect(leader.y1).toBe(380);
+    expect(leader.y2).toBe(480);
+    expect(leader.x1).toBeGreaterThanOrEqual(roof.x);
+    expect(leader.x1).toBeLessThanOrEqual(roof.x + roof.w);
+  });
+
+  it('文字在屋顶的斜角方向：线从屋顶的角连到文字的角', () => {
+    const leader = leaderBetween(roof, { x: 600, y: 480, w: 100, h: 50 })!;
+    expect([leader.x1, leader.y1]).toEqual([500, 380]);
+    expect([leader.x2, leader.y2]).toEqual([600, 480]);
+  });
+
+  it('紧贴的四个位置都被占了，就离开屋顶一段放，取最近的一档，放得下就是干净的', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    // 屋顶四周紧贴的位置都被别的东西占着
+    const blockers: Rect[] = [
+      { x: 300, y: 380, w: 300, h: 70 },
+      { x: 300, y: 240, w: 300, h: 60 },
+      { x: 506, y: 280, w: 220, h: 120 },
+      { x: 214, y: 280, w: 220, h: 120 },
+    ];
+    const [placed] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof, ...blockers], bounds, 6, [30, 60, 100]);
+    expect(placed!.clear).toBe(true);
+    for (const b of [roof, ...blockers]) expect(rectsOverlap(placed!, b)).toBe(false);
+    expect(rectGap(roof, placed!)).toBeGreaterThan(6);
+    // 同样的情况不给距离，只能挑重叠最少的
+    const [stuck] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof, ...blockers], bounds);
+    expect(stuck!.clear).toBe(false);
+  });
+
+  it('档位由近到远：近的档放得下就不用远的', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    const blockers: Rect[] = [{ x: 300, y: 380, w: 300, h: 40 }];
+    const [placed] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof, ...blockers], bounds, 6, [30, 60, 100]);
+    // 下方被挡，上方的紧贴位置是干净的，不用离开屋顶
+    expect(placed!.y + placed!.h).toBeLessThanOrEqual(roof.y);
+    expect(rectGap(roof, placed!)).toBeCloseTo(6, 9);
+  });
+
+  it('地图上的字（soft）尽量不压：下方有字，就换到上方', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    const text: Rect = { x: 420, y: 400, w: 60, h: 24 };
+    const [placed] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof], bounds, 6, [], [text]);
+    expect(rectsOverlap(placed!, text)).toBe(false);
+    expect(placed!.y + placed!.h).toBeLessThanOrEqual(roof.y);
+    expect(placed!.clear).toBe(true);
+  });
+
+  it('压住屋顶比压住字更糟：只有压字和压屋顶两种选择时，压字', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    // 四周紧贴的位置：下方和上方压着别的屋顶，右边和左边压着地图上的字
+    const others: Rect[] = [{ x: 300, y: 386, w: 300, h: 80 }, { x: 300, y: 244, w: 300, h: 50 }];
+    const texts: Rect[] = [{ x: 506, y: 290, w: 220, h: 100 }, { x: 214, y: 290, w: 220, h: 100 }];
+    const [placed] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof, ...others], bounds, 6, [], texts);
+    for (const o of [roof, ...others]) expect(rectsOverlap(placed!, o)).toBe(false);
+    expect(placed!.clear).toBe(false);
+  });
+
+  it('躲开一大块字值得拉出一档，躲开一点点字不值得：压得少时仍紧贴屋顶', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    // 四周紧贴的位置都压着字，但每处只压住一小点
+    const small: Rect[] = [{ x: 450, y: 386, w: 10, h: 10 }, { x: 450, y: 294, w: 10, h: 10 }, { x: 506, y: 330, w: 10, h: 10 }, { x: 294, y: 330, w: 10, h: 10 }];
+    const [near] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof], bounds, 6, [30, 60], small);
+    expect(rectGap(roof, near!)).toBeCloseTo(6, 9);
+    // 每处都压着一大块字，拉出一档就躲开了
+    const big: Rect[] = [{ x: 380, y: 386, w: 160, h: 50 }, { x: 380, y: 244, w: 160, h: 50 }, { x: 506, y: 300, w: 160, h: 50 }, { x: 234, y: 300, w: 160, h: 50 }];
+    const [far] = placeLabels([{ id: 1, anchor: roof, w: 200, h: 50 }], [roof], bounds, 6, [30, 60], big);
+    expect(rectGap(roof, far!)).toBeGreaterThan(6);
+    for (const t of big) expect(rectsOverlap(far!, t)).toBe(false);
+  });
+
+  it('候选屋顶的文字躲着地图上的字：店名在屋顶下方时换到别处', () => {
+    const bounds: Rect = { x: 0, y: 0, w: 1000, h: 800 };
+    const box: Rect = { x: 400, y: 300, w: 100, h: 80 };
+    const lines = ['小屋顶', '至本片区店铺平均 4.9 秒'];
+    const [plain] = layoutRoofLabels([{ roof: 1, box, lines, ok: true }], [], bounds, 15);
+    const [avoiding] = layoutRoofLabels([{ roof: 1, box, lines, ok: true }], [], bounds, 15, [plain!]);
+    expect(rectsOverlap(avoiding!, plain!)).toBe(false);
+    expect(rectsOverlap(avoiding!, box)).toBe(false);
+  });
+
+  it('候选屋顶的几档距离是字号的倍数，由近到远', () => {
+    expect(ROOF_LABEL_RINGS.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < ROOF_LABEL_RINGS.length; i++) expect(ROOF_LABEL_RINGS[i]).toBeGreaterThan(ROOF_LABEL_RINGS[i - 1] as number);
+  });
+});
+
+describe('候选屋顶的文字拆成几行', () => {
+  it('屋顶旁边的文字：第一行是大小、停机位上限和价格，飞行秒数拆成店和楼两行，和原来的一句一字不差，只少了中间的逗号', () => {
+    const state = campaignState();
+    for (const c of candidateRoofs(state)) {
+      const lines = roofLabelLines(c);
+      const full = roofLines(c);
+      expect(full).toHaveLength(2);
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toBe(full[0]);
+      expect(`${lines[1]}${lines[2]}`).toBe((full[1] as string).replace('\uFF0C', ''));
+    }
+  });
+
+  it('片区里还没有开张的店时没有飞行秒数，只有第一行', () => {
+    const c = candidateRoofs(campaignState())[0]!;
+    expect(roofLabelLines({ ...c, flight: { shops: null, buildings: 3 } })).toEqual([roofLines(c)[0]]);
   });
 });
 

@@ -118,6 +118,6 @@ describe('存档的大小', () => {
       expect(row.jsonChars / row.packedBytes).toBeGreaterThan(3);
       expect(row.fourSlotChars).toBeLessThan(LOCAL_STORAGE_CHARS);
     }
-    console.log(`\n沙盒存档的大小（${CITY.scenario}，${CITY.drones} 架飞机，每分钟 ${CITY.peakRate} 单，快超时的先送，哪座站都能送）\n${rows.map(format).join('\n')}\n`);
+    console.log(`\n沙盒存档的大小（${CITY.scenario}，${CITY.drones} 架飞机，每分钟 ${CITY.peakRate} 单，时限优先，全站协同）\n${rows.map(format).join('\n')}\n`);
   });
 });

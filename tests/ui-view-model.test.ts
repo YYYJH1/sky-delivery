@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
+import { STR, fmt } from '../src/content/strings.zh.ts';
 import { DAY_STEPS, DroneState, advance, applyCommand, bayPrice, createState, dronePrice, gatePrice, hashState, pushTip, stationPrice } from '../src/core/index.ts';
 import { fastForward } from '../src/ui/debug-params.ts';
 import { DEFAULT_VIEW, computeUiData, refundOption, wholeMoney } from '../src/ui/view-model.ts';
@@ -15,7 +16,7 @@ function data(state: ReturnType<typeof campaignState>): NonNullable<ReturnType<t
 }
 
 describe('小票和日程', () => {
-  it('开局：第 1 天 9:30，余额 0，今天进账 0，不在高峰里', () => {
+  it('开局：第 1 天 9:30，资金 0，今日收入 0，不在高峰里', () => {
     const d = data(campaignState());
     expect(d).toMatchObject({ step: 0, day: 1, clock: '9:30', dayFraction: 0, peak: null, balance: 0, earned: 0 });
   });
@@ -34,7 +35,7 @@ describe('小票和日程', () => {
     expect(applyCommand(state, { type: 'buyBay', station: 0 }).ok).toBe(true);
   });
 
-  it('今天进账取当天的 income，按送达那一天算，前一天的不计入', () => {
+  it('今日收入取当天的 income，按送达那一天算，前一天的不计入', () => {
     const state = campaignState();
     const camp = campaignOf(state);
     camp.income = [310.7, 55.2];
@@ -178,8 +179,8 @@ describe('退回按钮', () => {
   });
 });
 
-describe('建新站和改装', () => {
-  it('建新站：价格是最便宜的候选屋顶，开局钱不够，变淡，但能进入选屋顶的状态', () => {
+describe('新建站点和改装', () => {
+  it('新建站点：价格是最便宜的候选屋顶，开局钱不够，变淡，但能进入选屋顶的状态', () => {
     const b = data(campaignState()).build;
     expect(b.tag).toMatchObject({ price: Math.min(...b.candidates.map((c) => stationPrice(1, c.roof))), ok: false, dim: true });
     expect(b.canEnter).toBe(true);
@@ -201,9 +202,9 @@ describe('建新站和改装', () => {
 });
 
 describe('片区纸条、调度台、小结、日结、便签、结局的字段', () => {
-  it('开局：纸条是老街的，还没有订单送到，没有调度台、小结、日结、便签、结局', () => {
+  it('开局：纸条是老街的，暂无完成订单，没有调度台、小结、日结、便签、结局', () => {
     const d = data(campaignState());
-    expect(d.note).toMatchObject({ district: 0, name: '老街', star: 1, kind: 'noData', text: '老街　还没有订单送到。' });
+    expect(d.note).toMatchObject({ district: 0, name: '老街', star: 1, kind: 'noData', text: fmt(STR.hud.districtNote.noData, { district: '老街' }) });
     expect(d.noteChoices).toEqual([0]);
     expect(d).toMatchObject({ board: null, summary: null, dayEnd: null, tip: null, ending: null });
   });
@@ -243,9 +244,9 @@ describe('片区纸条、调度台、小结、日结、便签、结局的字段'
   it('便签和结局：最早没读的一张，结局的整句', () => {
     const state = campaignState();
     pushTip(state, 'autoDispatchOn');
-    expect(computeUiData(state)?.tip).toEqual({ id: 'autoDispatchOn', text: '新订单会自动派出。', queued: 0 });
+    expect(computeUiData(state)?.tip).toEqual({ id: 'autoDispatchOn', text: STR.tips.autoDispatchOn, queued: 0 });
     campaignOf(state).ending = { step: 5, days: 4, orders: 12 };
-    expect(computeUiData(state)?.ending).toBe('三个片区都到了四星。一共送了 12 单，用了 4 天。');
+    expect(computeUiData(state)?.ending).toBe(fmt(STR.system.ending, { orders: 12, days: 4 }));
   });
 
   it('价签、双层货箱、开通价签的显示跟着开放项', () => {

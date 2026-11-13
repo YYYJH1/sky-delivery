@@ -53,9 +53,42 @@ function migrateV1ToV2(data: SaveData): SaveData {
   return data;
 }
 
-/** 正式的迁移表。键是迁移前的版本号：表里的 [n] 把版本 n 迁到 n+1。以后把存档版本升到 3 时，在这里加 [2]。 */
+/** 对象里的数组字段，不是数组时当作空的。 */
+function listOf(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+/**
+ * 版本 2 到版本 3。经营模式的记录多了几个字段，缺的补默认值，已经有的值一个不改：
+ *   campaign.goals：最近一场高峰的目标，null。
+ *   每场高峰小结：cleared（整张小结的达标标记）和 baseline（小结对照）为 null，各片区一行的 line 和 met 为 null。
+ *   每次日结：peaksJudged 和 peaksCleared（判过目标的场数和其中达标的场数）为 0。
+ * 旧存档里的高峰没有设过目标，所以这些默认值就是当时的实情，读进来的状态玩起来与原来完全一样。
+ */
+function migrateV2ToV3(data: SaveData): SaveData {
+  const state = data.state;
+  const campaign = isRecord(state) ? state.campaign : undefined;
+  if (!isRecord(campaign)) return data;
+  if (campaign.goals === undefined) campaign.goals = null;
+  for (const peak of listOf(campaign.peaks)) {
+    if (peak.cleared === undefined) peak.cleared = null;
+    if (peak.baseline === undefined) peak.baseline = null;
+    for (const row of listOf(peak.districts)) {
+      if (row.line === undefined) row.line = null;
+      if (row.met === undefined) row.met = null;
+    }
+  }
+  for (const day of listOf(campaign.days)) {
+    if (day.peaksJudged === undefined) day.peaksJudged = 0;
+    if (day.peaksCleared === undefined) day.peaksCleared = 0;
+  }
+  return data;
+}
+
+/** 正式的迁移表。键是迁移前的版本号：表里的 [n] 把版本 n 迁到 n+1。以后把存档版本升到 4 时，在这里加 [3]。 */
 export const MIGRATIONS: MigrationTable = {
   1: migrateV1ToV2,
+  2: migrateV2ToV3,
 };
 
 export type MigrateResult = { ok: true; data: SaveData } | { ok: false; message: string };

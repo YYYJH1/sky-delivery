@@ -94,7 +94,7 @@ describe('previewDispatch：与实际派单一致', () => {
       // 老街五星，开局只有一座站、两架飞机，订单会积压，名单里才有没派出的订单
       const state = runningState(40 + k, [5, 1, 1]);
       setRules(state, rules);
-      rounds += checkAgainstDispatch(state, 1800);
+      rounds += checkAgainstDispatch(state, 2400);
     }
     expect(rounds).toBeGreaterThan(100);
   });
@@ -131,7 +131,7 @@ describe('previewDispatch：名次由当前生效的卡决定', () => {
     return state;
   }
 
-  it('先下单的先送：按下单的先后，换成来回快的先送之后名次变了', () => {
+  it('先到先送：按下单的先后，换成短程优先之后名次变了', () => {
     const state = threeOrders();
     expect(previewDispatch(state)).toEqual({ ids: [0, 1, 2], dispatching: 0 });
     setRules(state, { select: 'roundtrip' });

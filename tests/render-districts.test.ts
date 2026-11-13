@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { generateCity } from '../src/render/city.ts';
 import type { City } from '../src/render/city-types.ts';
-import { DISTRICT_MARGIN, FADED_ALPHA, assignDistricts, cityOfDistrict, districtOfPoint, modeAlpha, modeOf, riverCity } from '../src/render/districts.ts';
+import { DISTRICT_MARGIN, FADED_ALPHA, FADE_SECONDS, approachAlpha, assignDistricts, cityOfDistrict, districtOfPoint, modeAlpha, modeOf, riverCity } from '../src/render/districts.ts';
 import type { Rect } from '../src/render/geometry.ts';
 import { HELIPAD_NEAR, citySpecFromMap, planMapBoard } from '../src/render/map-spec.ts';
 
@@ -55,6 +55,40 @@ describe('三种样子', () => {
     expect(modeAlpha('hidden')).toBe(0);
     expect(FADED_ALPHA).toBeGreaterThan(0.2);
     expect(FADED_ALPHA).toBeLessThan(0.6);
+  });
+});
+
+describe('片区显示状态变了，不透明度渐变', () => {
+  it('匀速：走完 0 到 1 要 FADE_SECONDS，朝哪个方向都一样', () => {
+    expect(FADE_SECONDS).toBeGreaterThan(0.5);
+    expect(FADE_SECONDS).toBeLessThan(1.2);
+    expect(approachAlpha(0, 1, FADE_SECONDS / 2)).toBeCloseTo(0.5, 12);
+    expect(approachAlpha(1, 0, FADE_SECONDS / 2)).toBeCloseTo(0.5, 12);
+    expect(approachAlpha(0, 1, FADE_SECONDS)).toBe(1);
+  });
+
+  it('到了目标就停，不冲过头，也不倒退', () => {
+    expect(approachAlpha(0.3, FADED_ALPHA, 10)).toBe(FADED_ALPHA);
+    expect(approachAlpha(1, FADED_ALPHA, 10)).toBe(FADED_ALPHA);
+    expect(approachAlpha(0.2, 0.2, 0.5)).toBe(0.2);
+    expect(approachAlpha(0.2, 0.9, 0)).toBe(0.2);
+    expect(approachAlpha(0.2, 0.9, -1)).toBe(0.2);
+  });
+
+  it('没有给时间（第一次摆放，读档）直接到位', () => {
+    expect(approachAlpha(1, 0, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(approachAlpha(0, FADED_ALPHA, Number.NaN)).toBe(FADED_ALPHA);
+  });
+
+  it('没显示的片区第一次显示：从 0 起，在镜头挪动的时间里淡入到 FADED_ALPHA，每一步都不倒退', () => {
+    let alpha = 0;
+    let last = 0;
+    for (let ms = 16; ms <= 800; ms += 16) {
+      alpha = approachAlpha(alpha, FADED_ALPHA, 0.016);
+      expect(alpha).toBeGreaterThanOrEqual(last);
+      last = alpha;
+    }
+    expect(alpha).toBe(FADED_ALPHA);
   });
 });
 

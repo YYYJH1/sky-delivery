@@ -53,7 +53,7 @@ export interface Session {
   show(wallMs: number): ResumeOutcome;
   /** 页面正在关闭：保存。 */
   close(wallMs: number): void;
-  /** 玩家做了改变状态但没有走步数的操作（买东西、换规矩卡）之后调用。过一小会儿会保存，不可见或关闭时也会保存。 */
+  /** 玩家做了改变状态但没有走步数的操作（买东西、换策略卡）之后调用。过一小会儿会保存，不可见或关闭时也会保存。 */
   noteChange(): void;
   /** 换了一份状态（读档、导入）之后调用：清掉循环的累加器，把当前步当作已经存过。 */
   restart(savedStep?: number | null): void;

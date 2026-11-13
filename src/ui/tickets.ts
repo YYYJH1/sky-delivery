@@ -1,25 +1,32 @@
 // 高峰小结和日结两张长小票的数据。
 // 核心已经把数字、说明句的编号和参数记进了 campaign.peaks 和 campaign.days，这里只排版：
-// 每一行写什么，哪一列要不要显示，提前派出那一段有几种写法，说明句从词表取哪一条。
+// 每一行写什么，目标线和达标写在哪一行，与开局策略的对照写什么，纪录的小字，说明句从词表取哪一条。
 // 纯函数，不碰 DOM 和状态。
 import { STARS_V1 } from '../content/stars_v1.ts';
 import { SHOPS, STR, districtName, fmt, peakName, placeName, ruleName, stationNumeral, starNumeral } from '../content/strings.zh.ts';
 import type { DistrictIndex } from '../content/strings.zh.ts';
-import { dayOf } from '../core/index.ts';
-import type { DayDistrictRecord, DayRecord, ExtraSentence, MainSentence, PeakDistrictRow, PeakRecord, PeakSegments, SimState } from '../core/index.ts';
+import { DEFAULT_CONFIG, dayOf, gainTotal, incomeStanding, peakStanding } from '../core/index.ts';
+import type { DayDistrictRecord, DayRecord, ExtraSentence, MainSentence, PeakBaseline, PeakDistrictRow, PeakRecord, PeakSegments, PeakStanding, SimState, Standing } from '../core/index.ts';
 import { isRuleId } from './board.ts';
 import { wholeMoney } from './money.ts';
 import { peakClockRange } from './schedule.ts';
 
-/** 小票上的一行：左边是名称，右边是数。indent 为真时缩进，写在上一行的下面。 */
+/** 数后面的小字：纪录。fresh 为真时是新破的纪录，画得显眼一些。 */
+export interface RecordNote {
+  readonly text: string;
+  readonly fresh: boolean;
+}
+
+/** 小票上的一行：左边是名称，右边是数，数后面可以有一句纪录的小字。indent 为真时缩进，写在上一行的下面。 */
 export interface TicketRow {
   readonly label: string;
   readonly value: string;
   readonly indent: boolean;
+  readonly record: RecordNote | null;
 }
 
-function row(label: string, value: string | number, indent = false): TicketRow {
-  return { label, value: String(value), indent };
+function row(label: string, value: string | number, indent = false, record: RecordNote | null = null): TicketRow {
+  return { label, value: String(value), indent, record };
 }
 
 function money(amount: number): string {
@@ -30,19 +37,38 @@ function percent(value: number): string {
   return fmt(STR.common.percent, { value });
 }
 
+/**
+ * 纪录的小字。破了纪录写「新纪录」，没破写「纪录」和之前的最好成绩（成绩与它相同时也是它）。
+ * 之前没有同类的成绩（第一次）没有可比的，不写。asMoney 为真时成绩是金额。
+ */
+export function recordNote(standing: Standing | null, asMoney = false): RecordNote | null {
+  if (standing === null || standing.best === null) return null;
+  if (standing.broken) return { text: STR.metrics.record.broken, fresh: true };
+  const text = asMoney ? fmt(STR.metrics.record.bestMoney, { amount: wholeMoney(standing.best) }) : fmt(STR.metrics.record.best, { value: standing.best });
+  return { text, fresh: false };
+}
+
 // ---- 高峰小结 ----
 
+/** 小结里各片区一行的达标：达标或没达标，带着写在行里的文字。 */
+export interface GoalMark {
+  readonly met: boolean;
+  readonly text: string;
+}
+
 /**
- * 各片区一行：片区名，准时率，十格的条，比昨天。
- * 这个片区这一场没有订单时，准时率那一列写「没有订单」（noOrders 为真），没有条，也没有比昨天。
+ * 各片区一行：片区名，准时率，十格的条，这一场的目标和达标。
+ * 这个片区这一场没有订单时，准时率那一列写「没有订单」（noOrders 为真），没有条，也没有目标。
+ * goal 是这一场的目标线，没有设线时为 null。mark 是达没达标，没有设线或订单不够判时为 null。
  */
 export interface SummaryDistrictLine {
   readonly name: string;
   readonly pct: string;
   readonly bar: string;
-  readonly delta: string;
   /** 这一场这个片区没有订单。 */
   readonly noOrders: boolean;
+  readonly goal: string | null;
+  readonly mark: GoalMark | null;
 }
 
 /** 一张单的四段时间里的一段。longest 为真时是说明里点名的那一段，画圈。 */
@@ -54,10 +80,18 @@ export interface SegmentItem {
   readonly longest: boolean;
 }
 
-/** 「提前派出」那一段：先写卡名，再写下面几行。中途换过规矩时没有卡名，只有一行。 */
-export interface EarlyBlock {
-  readonly name: string | null;
-  readonly lines: readonly string[];
+/** 与开局策略的对照：同一批订单、同样的购买，「调度策略」和「协同策略」用开局的卡的结果。 */
+export interface CompareBlock {
+  readonly header: string;
+  /** 开局策略用的两张卡的名称。 */
+  readonly cards: string;
+  readonly row: string;
+  /** 比开局策略多准时或少准时几单。订单不多于运力、两套策略准时单数相同时写一句说明。 */
+  readonly gain: string;
+  /** 比开局策略多准时的纪录，只在多准时的时候写。 */
+  readonly record: RecordNote | null;
+  /** 开局策略下各片区的准时率，没有目标和达标。 */
+  readonly districts: readonly SummaryDistrictLine[];
 }
 
 export interface SummaryView {
@@ -67,14 +101,16 @@ export interface SummaryView {
   readonly period: string;
   readonly rows: readonly TicketRow[];
   readonly districtHeader: string;
-  /** 第一天没有前一天的数据，没有这一列。 */
-  readonly deltaHeader: string | null;
   readonly districts: readonly SummaryDistrictLine[];
+  /** 判过的片区全部达标并且没有退单时的标记，其余为 null。 */
+  readonly cleared: string | null;
+  /** 连续达标的场数，没有判过目标，或者还没有达标过时为 null。 */
+  readonly streak: string | null;
   /** 没有送达的订单时没有四段时间。 */
   readonly timeHeader: string;
   readonly segments: readonly SegmentItem[] | null;
-  /** 当前的卡是「先下单的先送」时没有这一段。 */
-  readonly early: EarlyBlock | null;
+  /** 这一场没有对照时为 null。 */
+  readonly compare: CompareBlock | null;
   /** 说明：主句，加最多一条附加句。 */
   readonly sentences: readonly string[];
   /** 底部的「打开调度台」，调度台还没开放时为 null。 */
@@ -89,17 +125,20 @@ export function tenCells(pct: number | null): string {
   return '■'.repeat(on) + '□'.repeat(10 - on);
 }
 
-/** 比昨天的变化，带正负号：+5，-3，0。 */
-export function signedDelta(delta: number): string {
-  return delta > 0 ? `+${delta}` : String(delta);
+/** 准时率那一列：百分数和十格的条，没有订单时写「没有订单」。 */
+function rateLine(district: number, n: number, pct: number | null): Pick<SummaryDistrictLine, 'name' | 'pct' | 'bar' | 'noOrders'> {
+  const name = districtName(district as DistrictIndex);
+  // 没有订单就没有准时率，也就没有十格的条
+  if (n === 0 || pct === null) return { name, pct: STR.summary.districtNoOrders, bar: '', noOrders: true };
+  return { name, pct: percent(pct), bar: tenCells(pct), noOrders: false };
 }
 
-function summaryDistricts(rows: readonly PeakDistrictRow[], withDelta: boolean): SummaryDistrictLine[] {
+function summaryDistricts(rows: readonly PeakDistrictRow[]): SummaryDistrictLine[] {
   return rows.map((r) => {
-    const name = districtName(r.district as DistrictIndex);
-    // 没有订单就没有准时率，也就没有可比的昨天和十格的条
-    if (r.n === 0 || r.pct === null) return { name, pct: STR.summary.districtNoOrders, bar: '', delta: '', noOrders: true };
-    return { name, pct: percent(r.pct), bar: tenCells(r.pct), delta: withDelta && r.delta !== null ? signedDelta(r.delta) : '', noOrders: false };
+    const rate = rateLine(r.district, r.n, r.pct);
+    const goal = r.line === null || rate.noOrders ? null : fmt(STR.metrics.summary.goal, { line: r.line });
+    const mark: GoalMark | null = r.met === null ? null : { met: r.met, text: r.met ? STR.metrics.summary.met : STR.metrics.summary.missed };
+    return { ...rate, goal, mark };
   });
 }
 
@@ -119,19 +158,34 @@ function segmentItems(segments: PeakSegments, main: MainSentence): SegmentItem[]
   ];
 }
 
+/** 开局策略用的两张卡的名称，取自开局的配置。 */
+function openingCards(): string {
+  const { select, zone } = DEFAULT_CONFIG.rules;
+  return fmt(STR.metrics.compare.cards, {
+    select: isRuleId(select) ? ruleName(select) : select,
+    zone: isRuleId(zone) ? ruleName(zone) : zone,
+  });
+}
+
 /**
- * 「提前派出」那一段，三种情况：
- * - 这一场中途换过「先送哪张单」：只写「这一场中途换过规矩」，没有数可写
- * - 现在的卡是「先下单的先送」：不显示这一段，它按下单顺序派，数恒为 0
- * - 其余：卡名，有几张订单，比按下单顺序更早派出
- * 中途换过卡并且最后换成了「先下单的先送」时，也写「这一场中途换过规矩」：前半场用过别的卡，数不是 0，只是没法算。
+ * 小结里与开局策略的对照。这一场没有对照时为 null。
+ * 比开局策略多准时或少准时几单。两套策略准时的单数相同时，订单不多于运力就写一句说明，否则写相同。
  */
-export function earlyBlock(record: PeakRecord): EarlyBlock | null {
-  if (record.changedMidPeak) return { name: null, lines: [STR.summary.early.switched] };
-  if (record.select === 'fifo' || record.early === null) return null;
+export function compareBlock(record: PeakRecord, standing: PeakStanding | null): CompareBlock | null {
+  const baseline: PeakBaseline | null = record.baseline;
+  if (baseline === null) return null;
+  const gain = record.onTime - baseline.onTime;
+  let text: string;
+  if (gain > 0) text = fmt(STR.metrics.compare.more, { count: gain });
+  else if (gain < 0) text = fmt(STR.metrics.compare.less, { count: -gain });
+  else text = baseline.lowLoad ? STR.metrics.compare.lowLoad : STR.metrics.compare.same;
   return {
-    name: isRuleId(record.select) ? ruleName(record.select) : null,
-    lines: [fmt(STR.summary.early.count, { count: record.early }), STR.summary.early.suffix],
+    header: STR.metrics.compare.header,
+    cards: openingCards(),
+    row: fmt(STR.metrics.compare.row, { onTime: baseline.onTime, cancelled: baseline.cancelled, revenue: wholeMoney(baseline.revenue) }),
+    gain: text,
+    record: gain > 0 ? recordNote(standing?.gain ?? null) : null,
+    districts: baseline.districts.map((d) => ({ ...rateLine(d.district, d.n, d.pct), goal: null, mark: null })),
   };
 }
 
@@ -169,10 +223,9 @@ export function extraSentence(extra: ExtraSentence): string {
   }
 }
 
-/** 一场高峰小结的长小票。index 是它在 campaign.peaks 里的位置。 */
-export function summaryTicket(record: PeakRecord, index: number, hasBoard: boolean): SummaryView {
+/** 一场高峰小结的长小票。index 是它在 campaign.peaks 里的位置，standing 是这一场的成绩和纪录，不给就不写纪录和连续达标。 */
+export function summaryTicket(record: PeakRecord, index: number, hasBoard: boolean, standing: PeakStanding | null = null): SummaryView {
   const range = peakClockRange(record.peak);
-  const withDelta = record.day > 0 && record.districts.some((d) => d.delta !== null);
   const sentences = [mainSentence(record.main)];
   if (record.extra !== null) sentences.push(extraSentence(record.extra));
   return {
@@ -181,18 +234,19 @@ export function summaryTicket(record: PeakRecord, index: number, hasBoard: boole
     period: fmt(STR.summary.period, { day: record.day + 1, start: range.start, end: range.end }),
     rows: [
       row(STR.summary.rows.orders, record.orders),
-      row(STR.summary.rows.onTime, record.onTime),
+      row(STR.summary.rows.onTime, record.onTime, false, recordNote(standing?.onTime ?? null)),
       row(STR.summary.rows.late, record.late),
       row(STR.summary.rows.lateOpen, record.lateOpen, true),
       row(STR.summary.rows.cancelled, record.cancelled),
       row(STR.summary.rows.revenue, money(record.revenue)),
     ],
     districtHeader: STR.summary.districtHeader,
-    deltaHeader: withDelta ? STR.summary.deltaHeader : null,
-    districts: summaryDistricts(record.districts, withDelta),
+    districts: summaryDistricts(record.districts),
+    cleared: record.cleared === true ? STR.metrics.summary.cleared : null,
+    streak: record.cleared === null || standing === null || standing.streak.best === 0 ? null : fmt(STR.metrics.summary.streak, { now: standing.streak.now, best: standing.streak.best }),
     timeHeader: STR.summary.timeHeader,
     segments: record.segments === null ? null : segmentItems(record.segments, record.main),
-    early: earlyBlock(record),
+    compare: compareBlock(record, standing),
     sentences,
     openBoard: hasBoard ? STR.summary.actions.openBoard : null,
     next: STR.summary.actions.next,
@@ -205,7 +259,7 @@ export function latestSummary(state: SimState, hasBoard: boolean): SummaryView |
   const index = peaks.length - 1;
   const record = peaks[index];
   if (record === undefined || record.day !== dayOf(state.step)) return null;
-  return summaryTicket(record, index, hasBoard);
+  return summaryTicket(record, index, hasBoard, peakStanding(peaks, index));
 }
 
 // ---- 日结 ----
@@ -218,6 +272,8 @@ export interface DayEndView {
   readonly rows: readonly TicketRow[];
   /** 各片区的一行，升星的片区后面跟着新店的几行。 */
   readonly lines: readonly string[];
+  /** 今天达标的场数，和累计比开局策略多准时或少准时的单数。没有可写的时候为空。 */
+  readonly metrics: readonly string[];
   readonly next: string;
 }
 
@@ -250,8 +306,21 @@ export function dayLines(line: DayDistrictRecord): string[] {
   }
 }
 
-/** 一次日结的小票。 */
-export function dayEndTicket(record: DayRecord, index: number): DayEndView {
+/** 累计比开局策略多准时或少准时的单数那一句。没有对照过，或者多少相抵为 0 时为 null。 */
+export function gainTotalLine(total: number, peaks: number): string | null {
+  if (peaks === 0 || total === 0) return null;
+  return total > 0 ? fmt(STR.metrics.dayEnd.gainMore, { count: total }) : fmt(STR.metrics.dayEnd.gainLess, { count: -total });
+}
+
+/**
+ * 一次日结的小票。income 是今天的进账和之前各天的最好成绩，gain 是累计的对照，不给就不写纪录和累计。
+ * 今天判过目标的高峰，写判了几场、其中几场全部达标。
+ */
+export function dayEndTicket(record: DayRecord, index: number, income: Standing | null = null, gain: { total: number; peaks: number } | null = null): DayEndView {
+  const metrics: string[] = [];
+  if (record.peaksJudged > 0) metrics.push(fmt(STR.metrics.dayEnd.goals, { judged: record.peaksJudged, cleared: record.peaksCleared }));
+  const total = gain === null ? null : gainTotalLine(gain.total, gain.peaks);
+  if (total !== null) metrics.push(total);
   return {
     index,
     title: STR.dayEnd.title,
@@ -263,9 +332,10 @@ export function dayEndTicket(record: DayRecord, index: number): DayEndView {
       row(STR.dayEnd.rows.late, record.late, true),
       row(STR.dayEnd.rows.cancelled, record.cancelled, true),
       row(STR.dayEnd.rows.pending, record.pending),
-      row(STR.dayEnd.rows.revenue, money(record.income)),
+      row(STR.dayEnd.rows.revenue, money(record.income), false, recordNote(income, true)),
     ],
     lines: record.districts.flatMap(dayLines),
+    metrics,
     next: STR.summary.actions.next,
   };
 }
@@ -275,5 +345,6 @@ export function latestDayEnd(state: SimState): DayEndView | null {
   const days = state.campaign?.days ?? [];
   const index = days.length - 1;
   const record = days[index];
-  return record === undefined ? null : dayEndTicket(record, index);
+  if (record === undefined) return null;
+  return dayEndTicket(record, index, incomeStanding(days, index), gainTotal(state.campaign?.peaks ?? []));
 }

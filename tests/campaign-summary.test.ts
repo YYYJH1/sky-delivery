@@ -288,7 +288,7 @@ function setLandWait(state: SimState, station: number, start: number, end: numbe
 }
 
 describe('小结的记录：口径沿用 peakSummary', () => {
-  it('五个数：来单、准时、超时和其中还没送到的、退单、进账，准时、超时、退单三项相加等于来单', () => {
+  it('五个数：订单、准时、超时和其中未送达的、取消、收入，准时、超时、取消三项相加等于订单', () => {
     const state = quietState();
     const record = summarize(state, 0, 'noon', [...many(4, { kind: 'on' }), ...many(3, { kind: 'late' }), ...many(2, { kind: 'open' }), { kind: 'cancel' }]);
     const s = peakSummary(state, 0, 'noon');
@@ -323,8 +323,8 @@ describe('小结的记录：口径沿用 peakSummary', () => {
     campaignOf(state).districts[1]!.open = true;
     const record = summarize(state, 0, 'noon', [...many(2, { kind: 'on' }), { kind: 'late' }, ...many(3, { district: 1, kind: 'on' })]);
     expect(record.districts).toEqual([
-      { district: 0, n: 3, onTime: 2, pct: 66, delta: null },
-      { district: 1, n: 3, onTime: 3, pct: 100, delta: null },
+      { district: 0, n: 3, onTime: 2, pct: 66, delta: null, line: null, met: null },
+      { district: 1, n: 3, onTime: 3, pct: 100, delta: null, line: null, met: null },
     ]);
     const single = summarize(quietState(), 0, 'noon', many(2, { kind: 'on' }));
     expect(single.districts.map((d) => d.district)).toEqual([0]);
@@ -334,7 +334,7 @@ describe('小结的记录：口径沿用 peakSummary', () => {
     const state = quietState();
     campaignOf(state).districts[1]!.open = true;
     const record = summarize(state, 0, 'noon', many(3, { kind: 'on' }));
-    expect(record.districts[1]).toEqual({ district: 1, n: 0, onTime: 0, pct: null, delta: null });
+    expect(record.districts[1]).toEqual({ district: 1, n: 0, onTime: 0, pct: null, delta: null, line: null, met: null });
   });
 
   it('与前一天同一场高峰相比的变化：单位是百分点，第一天为空，午高峰对午高峰，晚高峰对晚高峰', () => {
@@ -356,7 +356,7 @@ describe('小结的记录：口径沿用 peakSummary', () => {
     const state = quietState();
     summarize(state, 0, 'noon', [...many(7, { kind: 'on' }), ...many(2, { kind: 'late' })]);
     const today = summarize(state, 1, 'noon', [...many(8, { kind: 'on' }), { kind: 'late' }]);
-    expect(today.districts[0]).toEqual({ district: 0, n: 9, onTime: 8, pct: 88, delta: 11 });
+    expect(today.districts[0]).toEqual({ district: 0, n: 9, onTime: 8, pct: 88, delta: 11, line: null, met: null });
   });
 
   it('前一天这一场没有订单，或者这个片区前一天还没开通：变化为空', () => {
@@ -388,7 +388,7 @@ describe('小结的记录：口径沿用 peakSummary', () => {
     expect(empty.extra).toBeNull();
   });
 
-  it('提前派出的订单数：沿用 peakSummary，没换过卡时是个数，这一场中途换过「先送哪张单」时为 null 并记一个标记，记下当时的卡', () => {
+  it('提前派出的订单数：沿用 peakSummary，没换过卡时是个数，这一场中途换过「调度策略」时为 null 并记一个标记，记下当时的卡', () => {
     const plain = quietState();
     const a = summarize(plain, 0, 'noon', many(3, { kind: 'on' }));
     expect(a).toMatchObject({ early: 0, changedMidPeak: false, select: 'fifo' });
@@ -525,7 +525,7 @@ describe('调度台白板底部的小票条：前一天同一场高峰的准时�
     return state;
   }
 
-  it('第一天没有记录：null，界面写「还没有昨天这场高峰的记录」', () => {
+  it('第一天没有记录：null，界面写「暂无昨日同场高峰记录」', () => {
     const state = twoDays();
     expect(lastPeakTicket(state, 'noon', 0)).toBeNull();
     expect(lastPeakTicket(state, 'evening', 0)).toBeNull();

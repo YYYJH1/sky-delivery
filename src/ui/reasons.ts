@@ -4,7 +4,7 @@
 import { MAP_V1 } from '../content/map_v1.ts';
 import { ECONOMY_V1 } from '../content/economy_v1.ts';
 import { UNLOCKS_V1 } from '../content/unlocks_v1.ts';
-import { DISTRICTS, districtName, reasonText } from '../content/strings.zh.ts';
+import { DISTRICTS, districtName, reasonText, starNumeral } from '../content/strings.zh.ts';
 import type { DistrictIndex, ReasonKey } from '../content/strings.zh.ts';
 import { bayCap, quoteCommand } from '../core/index.ts';
 import type { Command, CommandFailure, SimState } from '../core/index.ts';
@@ -87,7 +87,7 @@ export function failureText(code: CommandFailure, context: FailureContext = {}):
       const district = need(context.district, 'district');
       const previous = DISTRICTS[district - 1];
       if (previous === undefined) throw new RangeError(`ui: district ${String(district)} has no previous district`);
-      return reasonText('needThreeStars', { previous, district: districtName(district as DistrictIndex) });
+      return reasonText('needThreeStars', { previous });
     }
     case 'roofTaken':
       return reasonText('rooftopTaken');
@@ -107,8 +107,12 @@ export function failureText(code: CommandFailure, context: FailureContext = {}):
       return reasonText('priceTagsLocked', { amount: need(context.amount, 'amount') });
     case 'doubleBoxLocked':
       return reasonText('doubleBoxLocked');
-    case 'districtHidden':
-      return reasonText('districtHidden');
+    case 'districtHidden': {
+      const district = need(context.district, 'district');
+      const show = UNLOCKS_V1.show.find((s) => s.district === district);
+      if (show === undefined) throw new RangeError(`ui: district ${String(district)} has no show condition`);
+      return reasonText('districtHidden', { previous: districtName(show.after as DistrictIndex), star: starNumeral(show.star) });
+    }
     case 'ruleLocked':
       return reasonText('ruleLocked');
     case 'orderNotWaiting':
@@ -165,6 +169,7 @@ export function failureContext(state: SimState, command: Command, code: CommandF
       return roof === undefined ? {} : { district: roof.district };
     }
     case 'needStars':
+    case 'districtHidden':
       return command.type === 'openDistrict' ? { district: command.district } : {};
     case 'priceTagsLocked':
       return { amount: UNLOCKS_V1.priceTagsBalance };

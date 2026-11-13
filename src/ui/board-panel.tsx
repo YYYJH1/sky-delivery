@@ -1,10 +1,16 @@
-// 调度台（右侧白板）的部件：收起时是标题、一行小字和当前选中的卡名，展开后是三栏的卡、两套规矩的页签、底部的小票条。
+// 调度台（右侧白板）的部件：收起时是标题、一行小字和当前选中的卡名，展开后是三栏的卡、两套策略的页签、底部的小票条。
 // 布局：每栏的磁贴排成两列，说明在磁贴下面，页签和标题在同一行。
 // 部件只读 state.ts 里的界面数据，点击交给 actions。文字全部取自词表。
-// 样式：白板白，铝框灰的边，选中的磁贴蓝黑实心，没开放的磁贴虚线框。
+// 样式：白板白，铝框灰的边，圆角 6，标题和栏目名是手写体。磁贴圆角 3，选中的蓝黑实心配纸白手写字，没选中的白底细边，没开放的虚线边。
+// 底部用一段胶带贴着一张小票条，写上一场同类高峰的结果。
 import { actions, boardOpen, pickingDistrict } from './state.ts';
 import type { BoardCard, BoardColumn, BoardView } from './board.ts';
+import { paperImage } from './paper.ts';
+import { MarkCircle, MarkUnderline, Sheet } from './sheets.tsx';
 import type { UiData } from './view-model.ts';
+
+/** 小票条的文字是一句话，几段之间隔着全角空格。第一段（昨日的高峰）写一行，后面几段合在第二行，全角空格留在页面里但不占位置。 */
+const SPLIT = String.fromCodePoint(0x3000);
 
 function Picker({ board }: { board: BoardView }) {
   return (
@@ -19,6 +25,7 @@ function Picker({ board }: { board: BoardView }) {
             onClick={() => actions.clickPickDistrict(choice.rule)}
           >
             {choice.name}
+            {choice.selected ? <MarkCircle seed={70 + choice.district} /> : null}
           </span>
         ))}
       </div>
@@ -44,10 +51,13 @@ function Magnet({ card }: { card: BoardCard }) {
   );
 }
 
-function Column({ column, board }: { column: BoardColumn; board: BoardView }) {
+function Column({ column, board, index }: { column: BoardColumn; board: BoardView; index: number }) {
   return (
     <div class="board-col" data-part={`column-${column.key}`}>
-      <div class="board-col-title">{column.title}</div>
+      <div class="board-col-title">
+        {column.title}
+        <MarkUnderline seed={80 + index} />
+      </div>
       {column.locked ? (
         <div class="magnet locked block-lock" data-part={`locked-${column.key}`}>
           {column.lockText}
@@ -64,13 +74,30 @@ function Column({ column, board }: { column: BoardColumn; board: BoardView }) {
   );
 }
 
+/** 白板底部的小票条，一段胶带贴在上沿。 */
+function BoardTicket({ text }: { text: string }) {
+  const [first = '', ...rest] = text.split(SPLIT);
+  return (
+    <Sheet kind="slip" seed={51} depth={4} class="slip board-ticket" part="board-ticket">
+      <span class="tape" style={{ backgroundImage: paperImage('tape', 68, 15, 0) }} />
+      <span class="board-ticket-line">{first}</span>
+      {rest.length === 0 ? null : (
+        <>
+          <span class="gap">{SPLIT}</span>
+          <span class="board-ticket-line">{rest.join(SPLIT)}</span>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 export function BoardPanel({ d }: { d: UiData }) {
   const board = d.board;
   if (board === null) return null;
   if (!boardOpen.value) {
     return (
       <div class="corner rm">
-        <div class="block board collapsed" data-part="board" data-state="collapsed" onClick={() => actions.clickBoard()}>
+        <Sheet kind="board" seed={41} class="block board collapsed" part="board" attrs={{ 'data-state': 'collapsed' }} onClick={() => actions.clickBoard()}>
           <div class="board-title" data-part="board-title">
             {board.title}
           </div>
@@ -82,13 +109,13 @@ export function BoardPanel({ d }: { d: UiData }) {
               {name}
             </div>
           ))}
-        </div>
+        </Sheet>
       </div>
     );
   }
   return (
     <div class="corner rm open">
-      <div class="block board expanded" data-part="board" data-state="expanded">
+      <Sheet kind="board" seed={41} class="block board expanded" part="board" attrs={{ 'data-state': 'expanded' }}>
         <div class="board-head">
           <div class="board-title clickable" data-part="board-title" onClick={() => actions.clickBoard()}>
             {board.title}
@@ -98,18 +125,17 @@ export function BoardPanel({ d }: { d: UiData }) {
               {board.tabs.map((tab) => (
                 <span key={tab.peak} class={tab.on ? 'word on' : 'word'} data-part={`board-tab-${tab.peak}`} onClick={() => actions.clickBoardTab(tab.peak)}>
                   {tab.name}
+                  {tab.on ? <MarkCircle seed={90} /> : null}
                 </span>
               ))}
             </div>
           )}
         </div>
-        {board.columns.map((column) => (
-          <Column key={column.key} column={column} board={board} />
+        {board.columns.map((column, index) => (
+          <Column key={column.key} column={column} board={board} index={index} />
         ))}
-        <div class="board-ticket" data-part="board-ticket">
-          {board.ticket}
-        </div>
-      </div>
+        <BoardTicket text={board.ticket} />
+      </Sheet>
     </div>
   );
 }

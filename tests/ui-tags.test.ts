@@ -45,7 +45,7 @@ describe('由报价做成价签', () => {
   });
 });
 
-describe('一座站的「加停机位」和「添飞机」', () => {
+describe('一座站的「新增停机位」和「购买无人机」', () => {
   it('价格按这座站自己已有的数量算：开局的站有自带的停机位和飞机，下一个停机位、下一架飞机各是下一档的价格', () => {
     const state = withMoney(campaignState(), 10_000);
     const tags = stationTags(state, 0);
@@ -58,7 +58,7 @@ describe('一座站的「加停机位」和「添飞机」', () => {
     expect(tags.addDrone.reason).toBe('fleetFull');
   });
 
-  it('加了一个停机位之后，添飞机能买了，停机位的价格涨到下一档', () => {
+  it('新增了一个停机位之后，购买无人机能买了，停机位的价格涨到下一档', () => {
     const state = withMoney(campaignState(), 10_000);
     must(state, { type: 'buyBay', station: 0 });
     const tags = stationTags(state, 0);
@@ -82,7 +82,7 @@ describe('一座站的「加停机位」和「添飞机」', () => {
   });
 });
 
-describe('「建新站」价签', () => {
+describe('「新建站点」价签', () => {
   /** 开局时候选屋顶里最便宜的一块的建站价：第 2 座站的基准价乘候选屋顶里最小的价格系数，取整。 */
   function cheapestOpening(state: ReturnType<typeof campaignState>): number {
     const smallest = Math.min(...MAP_V1.roofs.filter((_, i) => candidateRoofs(state).some((c) => c.roof === i)).map((r) => r.priceCoef));

@@ -4,6 +4,7 @@
 //
 // 一局的流程：每一步先替玩家点击开局的订单（出现一秒之后，与 tools/campaign.ts 相同），
 // 每隔一秒（10 步）做一次决定：先换卡，再买东西。决定都在两步之间做，不改变核心的任何规则。
+// 一局默认玩 40 个游戏日（240 分钟，一倍速），足够看清三个片区全部四星的结局。到不了结局的局，结局的节点记为没有到达。
 //
 // 买东西的办法是一张按优先级排好的购物清单，每次决定只看清单上第一个「现在可以买」的东西。
 // 可以买是指除了钱之外的条件都满足（价签开放、片区开通、屋顶有空、没到上限）。钱够就买，钱不够就等着攒，
@@ -13,11 +14,19 @@
 // ---- 五种玩法 ----
 //
 // 1 均衡（balanced）。一个合理的玩家。
-//   换卡：「先送哪张单」一栏开放后换成「快超时的先送」。有两座以上的站之后，「别的站帮不帮」换成「等 10 秒再帮」。
-//   开通写字楼区之后分成午晚两套，「某一片的先送」开放后，午高峰那套的「先送哪张单」换成「写字楼区的先送」，晚高峰那套保持「快超时的先送」。
+//   换卡：「调度策略」一栏开放后换成「时限优先」。有两座以上的站之后，「协同策略」换成「延迟支援」。
+//   开通写字楼区之后分成午晚两套，「{片区}优先」随写字楼区的开通一起开放。午高峰那套的「调度策略」换成「写字楼区优先」，
+//   直到写字楼区到了结局的星级（四星）：那之后再优先它，只是把老街和大学城的订单排到后面，换回「时限优先」，掉回四星以下时再换成「写字楼区优先」。
+//   晚高峰那套保持「时限优先」。
+//   大学城开通以后，午高峰写字楼区忙，晚高峰大学城忙，不忙的那一头的站里有飞机空着。
+//   所以大学城建好第一座站、三个片区各有一座站之后，「协同策略」从「延迟支援」换成「全站协同」，空着的飞机不用等 10 秒。
+//   晚高峰那套的「调度策略」仍是「时限优先」：大学城的订单占晚高峰的多数，再优先它就是把别的片区的订单排到后面。
+//   不选「老街优先」和「大学城优先」，也不选「短程优先」。
 //   买东西，按下面的优先级：
 //   甲 开通写字楼区：老街三星之后显示，价格取内容表。新片区是眼前的目标，排在扩建之前，所以攒钱的时候不买别的。
+//      写字楼区四星之后显示大学城，同样开通，规则相同，价格取内容表。
 //   乙 写字楼区开通后，在写字楼区建第一座站。选址取到本片区已开张的店和本片区的楼平均距离之和最小的一块，不选小屋顶（有中、大屋顶时）。
+//      大学城开通后，在大学城建第一座站，选址办法相同，排在写字楼区的第一座站之后。
 //   丙 添飞机和停机位：有空停机位的站里，飞机最少的那一座添飞机（并列取编号小的）。所有站的停机位都占满了，
 //      而且没到屋顶的上限，就在飞机最少的站加一个停机位，下一次决定再添飞机。
 //   丁 屋顶放满之后，在双层货箱、起降口升级、建新站之间选，看最近一场高峰小结的主句：
@@ -26,21 +35,23 @@
 //      「订单主要花在路上」先建新站，再买双层货箱，再升起降口。其余的主句按双层货箱、新站、起降口的顺序。
 //      新站建在已开通的片区里，优先选还没有站的片区，其次站最少的片区，选址办法同乙。
 //   不买就近降落。它是可以买的改装之一，但这五种玩法的目标是看扩建和换卡的节奏，所以所有玩法都不买它。
-// 2 只扩建一座站（singleStation）。只在第一座站上买飞机、停机位、起降口升级和双层货箱，从不建第二座站，会开通写字楼区。
-//   换卡和均衡相同，只是只有一座站，所以「别的站帮不帮」不会开放。
-// 3 全程不换规矩卡（noCards）。从不下换卡的命令，规矩卡一直是开局的「先下单的先送」「哪座站都能送」「一趟送一单」，其余同均衡。
-//   买下双层货箱时，核心会自动把「一趟送几单」从「一趟送一单」换成「顺路的一起送」，这不算玩家换卡（见 campaign/rulesets.ts），所以这一栏会变。
+// 2 只扩建一座站（singleStation）。只在第一座站上买飞机、停机位、起降口升级和双层货箱，从不建第二座站，会开通写字楼区和大学城。
+//   换卡和均衡相同，只是只有一座站，所以「协同策略」不会开放。
+// 3 全程不换策略卡（noCards）。从不下换卡的命令，策略卡一直是开局的「先到先送」「全站协同」「单独配送」，其余同均衡。
+//   买下双层货箱时，核心会自动把「合单策略」从「单独配送」换成「顺路合并」，这不算玩家换卡（见 campaign/rulesets.ts），所以这一栏会变。
 // 4 只买飞机（dronesOnly）。只买飞机和放下这些飞机必须的停机位，不建站，不升起降口，不买货箱，换卡和均衡相同。
-//   开通写字楼区不算「买其他」：它是一个片区的开通，不是对运力的投入，不开通就无法继续往前走。
+//   开通写字楼区和大学城不算「买其他」：它们是片区的开通，不是对运力的投入，不开通就无法继续往前走。
 // 5 不操作（idle）。点完开局的五张订单之后什么也不做，作为参照。
 import { MAP_V1 } from '../src/content/map_v1.ts';
-import { applyCommand, bayCap, createState, fleetOf, hashState, isUnlocked, quoteCommand, step, DAY_STEPS } from '../src/core/index.ts';
-import type { CampaignState, Command, PeakRecord, RuleColumn, RuleSet, SimState, Station } from '../src/core/index.ts';
+import { createPlay } from '../src/app/play.ts';
+import { STARS_V1 } from '../src/content/stars_v1.ts';
+import { applyCommand, bayCap, createState, EVENING_WINDOW, fleetOf, hashState, isUnlocked, NOON_WINDOW, quoteCommand, ruleOpen, step, DAY_STEPS } from '../src/core/index.ts';
+import type { CampaignState, Command, CommandResult, PeakRecord, RuleColumn, RuleSet, SimState, Station } from '../src/core/index.ts';
 
 // ---- 常量 ----
 
-/** 每局默认运行的游戏日数。设计要求至少 12 天（72 分钟），多留一些，固定玩法在目标时间之后才做到时也能看见。 */
-export const DEFAULT_DAYS = 16;
+/** 每局默认运行的游戏日数：40 天，一倍速 240 分钟。结局的目标是 2 到 3 小时，再留一个小时，晚到的局也能看见。 */
+export const DEFAULT_DAYS = 40;
 /** 开局订单出现之后脚本隔多少步点击，与 tools/campaign.ts 的默认值相同（1 秒）。 */
 export const CLICK_DELAY = 10;
 /** 每隔多少步做一次决定（1 秒）。 */
@@ -50,6 +61,7 @@ const MAX_BUYS_PER_DECISION = 12;
 
 const OLD = 0;
 const OFFICE = 1;
+const CAMPUS = 2;
 
 export type PolicyId = 'balanced' | 'singleStation' | 'noCards' | 'dronesOnly' | 'idle';
 export const POLICY_IDS: readonly PolicyId[] = ['balanced', 'singleStation', 'noCards', 'dronesOnly', 'idle'];
@@ -66,7 +78,7 @@ interface BuyFlags {
 export interface PolicySpec {
   id: PolicyId;
   name: string; // 汇总表里的名称
-  cards: boolean; // 会不会换规矩卡
+  cards: boolean; // 会不会换策略卡
   buys: BuyFlags;
 }
 
@@ -83,8 +95,21 @@ export const POLICIES: Readonly<Record<PolicyId, PolicySpec>> = {
 // ---- 节点 ----
 
 /** 节奏目标里要记录的节点，加上几个帮助看懂的附加节点。值是第一次发生的步，一局里没有发生为 null。 */
-export const MAIN_NODES = ['firstPurchase', 'oldStreet2', 'oldStreet3', 'officeShown', 'secondStation', 'firstChoice', 'office3', 'campusShown'] as const;
-export const EXTRA_NODES = ['selectOpen', 'selectSet', 'officeOpened', 'doubleBoxOpen', 'firstGate'] as const;
+export const MAIN_NODES = [
+  'firstPurchase',
+  'oldStreet2',
+  'oldStreet3',
+  'officeShown',
+  'secondStation',
+  'firstChoice',
+  'office3',
+  'campusShown',
+  'campusOpened',
+  'campus3',
+  'campus4',
+  'ending',
+] as const;
+export const EXTRA_NODES = ['selectOpen', 'selectSet', 'officeOpened', 'doubleBoxOpen', 'firstGate', 'oldStreet4', 'office4'] as const;
 export type MainNodeId = (typeof MAIN_NODES)[number];
 export type ExtraNodeId = (typeof EXTRA_NODES)[number];
 export type NodeId = MainNodeId | ExtraNodeId;
@@ -92,7 +117,7 @@ export type NodeId = MainNodeId | ExtraNodeId;
 export interface NodeInfo {
   id: NodeId;
   label: string;
-  /** 目标区间，一倍速的分钟。附加节点没有目标 */
+  /** 目标区间，一倍速的分钟。附加节点和没有目标的节点为 null */
   target: readonly [number, number] | null;
   targetText: string;
 }
@@ -105,12 +130,18 @@ export const NODE_INFO: readonly NodeInfo[] = [
   { id: 'secondStation', label: '第二座站建成', target: [15, 20], targetText: '15 到 20' },
   { id: 'firstChoice', label: '第一个需要比较的购买选择', target: [15, 25], targetText: '15 到 25' },
   { id: 'office3', label: '写字楼区三星', target: [45, 60], targetText: '45 到 60' },
-  { id: 'campusShown', label: '大学城显示', target: [45, 60], targetText: '45 到 60' },
-  { id: 'selectOpen', label: '（附）「先送哪张单」一栏开放', target: null, targetText: '' },
+  { id: 'campusShown', label: '大学城显示（写字楼区四星）', target: null, targetText: '' },
+  { id: 'campusOpened', label: '大学城开通', target: null, targetText: '' },
+  { id: 'campus3', label: '大学城三星', target: null, targetText: '' },
+  { id: 'campus4', label: '大学城四星', target: null, targetText: '' },
+  { id: 'ending', label: '三个片区全部四星（结局）', target: [120, 180], targetText: '120 到 180' },
+  { id: 'selectOpen', label: '（附）「调度策略」一栏开放', target: null, targetText: '' },
   { id: 'selectSet', label: '（附）第一次换卡', target: null, targetText: '' },
   { id: 'officeOpened', label: '（附）开通写字楼区', target: null, targetText: '' },
   { id: 'doubleBoxOpen', label: '（附）双层货箱开放', target: null, targetText: '' },
   { id: 'firstGate', label: '（附）第一次买起降口升级', target: null, targetText: '' },
+  { id: 'oldStreet4', label: '（附）老街四星', target: null, targetText: '' },
+  { id: 'office4', label: '（附）写字楼区四星', target: null, targetText: '' },
 ];
 
 /** 一步对应的一倍速分钟数：一步 0.1 秒。 */
@@ -136,7 +167,7 @@ export interface PurchaseRecord {
 export interface DayLine {
   district: number;
   star: number; // 日结之后
-  n: number; // 最近两天有结果的订单数
+  n: number; // 最近两天完成的订单数
   onTimePct: number | null;
   cancelPct: number | null;
   kind: string;
@@ -161,12 +192,32 @@ export interface CrossRiver {
   fromOld: number[];
 }
 
+/**
+ * 每个游戏日里，午高峰和晚高峰的下单时段内下单的订单数，按送往的片区分。
+ * noon[天][片区]，天从 0 数起，片区的编号与地图一致：0 老街，1 写字楼区，2 大学城。包括退单的订单。
+ */
+export interface PeakOrders {
+  noon: number[][];
+  evening: number[][];
+}
+
+/**
+ * 小结的对照：每场高峰比按开局的卡多准时的单数，按小结生成的先后排，没有对照的场为 null，另有有对照的场数和多准时的总数。
+ * 只在玩的时候要求了对照才有，见 PlayOptions 的 shadow。
+ */
+export interface ShadowStat {
+  compared: number;
+  total: number;
+  gains: (number | null)[];
+}
+
 export interface RunRecord {
   policy: PolicyId;
   seed: number;
   days: number;
   nodes: Record<NodeId, number | null>;
   daily: DayOut[];
+  peakOrders: PeakOrders;
   purchases: PurchaseRecord[];
   /** 换卡的命令成功了几次（核心自动换的不算） */
   cardChanges: number;
@@ -174,15 +225,31 @@ export interface RunRecord {
   maxSaving: number; // 最长的攒钱时间，步
   crossRiver: CrossRiver | null;
   final: { money: number; spent: number; stars: number[]; open: boolean[]; stations: number; drones: number; bays: number; rules: { select: string; zone: string; pool: string } };
+  shadow?: ShadowStat;
   hash: string;
+}
+
+/** 午晚两套策略里「调度策略」各选哪张卡，用来比较换卡的价值。写字楼区开通之后才分成两套，没开放的卡先用「时限优先」。 */
+export interface SelectCards {
+  noon: string;
+  evening: string;
 }
 
 export interface PlayOptions {
   days?: number;
   clickDelay?: number;
   decideEvery?: number;
+  /** 覆盖「调度策略」的选法，缺省按各玩法的规则选。只对会换卡的玩法起作用 */
+  selectCards?: SelectCards;
   /** 测试用：开局多给的钱，缺省 0 */
   startMoney?: number;
+  /** 命令和推进经过 createPlay，每场高峰同时按开局的卡算出对照，写进记录的 shadow 字段。对照只加记录，不改变游戏，也不改变自动玩家的决定。缺省不算 */
+  shadow?: boolean;
+  /**
+   * 每一步开始时调用，这时脚本还没有做这一步的决定，核心也还没有执行这一步。只读状态，不得修改。
+   * 对照两套策略时用它在某一步复制状态。
+   */
+  onStep?: (state: SimState) => void;
 }
 
 export interface PlayOutcome {
@@ -328,15 +395,26 @@ function fullRoofChoices(state: SimState, spec: PolicySpec): Command[] {
   return order.filter((c): c is Command => c !== null);
 }
 
+/** 这个片区里有没有没退回的站。 */
+function hasStationIn(state: SimState, district: number): boolean {
+  return liveStations(state).some((s) => stationDistrict(state, s.id) === district);
+}
+
 /** 购物清单，按优先级。每个命令的开放条件由核心的报价判断，这里不重复。 */
 export function shoppingList(state: SimState, spec: PolicySpec): Command[] {
   const campaign = campaignOf(state);
   const list: Command[] = [];
   const office = campaign.districts[OFFICE] as { open: boolean };
+  const campus = campaign.districts[CAMPUS] as { open: boolean };
+  // 片区还没显示或上一个片区还没到三星时，核心的报价说不能买，清单跳过它，继续看后面的
   if (spec.buys.district && !office.open) list.push({ type: 'openDistrict', district: OFFICE });
-  if (spec.buys.station && office.open && !liveStations(state).some((s) => stationDistrict(state, s.id) === OFFICE)) {
-    const roof = chooseRoof(state, OFFICE);
-    if (roof >= 0) list.push({ type: 'buildStation', roof });
+  if (spec.buys.district && office.open && !campus.open) list.push({ type: 'openDistrict', district: CAMPUS });
+  for (const district of [OFFICE, CAMPUS]) {
+    const open = (campaign.districts[district] as { open: boolean }).open;
+    if (spec.buys.station && open && !hasStationIn(state, district)) {
+      const roof = chooseRoof(state, district);
+      if (roof >= 0) list.push({ type: 'buildStation', roof });
+    }
   }
   const growth = growthCommand(state, spec);
   if (growth !== null) list.push(growth);
@@ -348,23 +426,34 @@ export function shoppingList(state: SimState, spec: PolicySpec): Command[] {
 
 type PeakName = 'noon' | 'evening';
 
-/** 某一套规矩里各栏现在该选哪张卡。栏还没开放时不写，由核心的开放条件决定。 */
-function wantedRules(state: SimState, peak: PeakName | null): Partial<Record<RuleColumn, string>> {
+/**
+ * 某一套策略里各栏现在该选哪张卡。栏还没开放时不写，由核心的开放条件决定。
+ * 「{片区}优先」开放之后，午高峰那套在写字楼区没到结局星级时选写字楼区，晚高峰那套和没有分成两套时选「时限优先」。
+ * 「协同策略」：大学城建站之前选「延迟支援」，三个片区各有一座站之后选「全站协同」。
+ */
+function wantedRules(state: SimState, peak: PeakName | null, selectCards?: SelectCards): Partial<Record<RuleColumn, string>> {
   const want: Partial<Record<RuleColumn, string>> = {};
   if (isUnlocked(state, 'selectColumn')) {
-    want.select = peak === 'noon' && isUnlocked(state, 'prioDistrict') ? 'prioOffice' : 'deadline';
+    if (selectCards !== undefined && peak !== null) {
+      const id = selectCards[peak];
+      want.select = ruleOpen(state, 'select', id) ? id : 'deadline';
+    } else {
+      // 午高峰优先写字楼区，直到它到了结局的星级：那之后再优先它就是白白把老街和大学城的订单排到后面
+      const office = campaignOf(state).districts[OFFICE] as { star: number };
+      want.select = peak === 'noon' && isUnlocked(state, 'prioDistrict') && office.star < STARS_V1.endingStar ? 'prioOffice' : 'deadline';
+    }
   }
-  if (isUnlocked(state, 'zoneColumn')) want.zone = 'hybrid';
+  if (isUnlocked(state, 'zoneColumn')) want.zone = hasStationIn(state, CAMPUS) ? 'global' : 'hybrid';
   return want;
 }
 
 /** 要换的卡，一栏一条命令。还没分成两套时改现在的一套，分成两套之后午晚各改各的。 */
-export function ruleCommands(state: SimState, spec: PolicySpec): Command[] {
+export function ruleCommands(state: SimState, spec: PolicySpec, selectCards?: SelectCards): Command[] {
   if (!spec.cards) return [];
   const sets = campaignOf(state).ruleSets;
   const commands: Command[] = [];
   const consider = (peak: PeakName | null, current: Record<RuleColumn, string>): void => {
-    const want = wantedRules(state, peak);
+    const want = wantedRules(state, peak, selectCards);
     for (const column of ['select', 'zone'] as const) {
       const id = want[column];
       if (id === undefined || current[column] === id) continue;
@@ -399,13 +488,13 @@ function targetOf(command: Command): number | null {
 }
 
 /** 开局的五张订单：出现 clickDelay 步之后点击。 */
-function clickOpening(state: SimState, clickDelay: number): void {
+function clickOpening(state: SimState, clickDelay: number, run: (command: Command) => CommandResult): void {
   const campaign = campaignOf(state);
   if (campaign.opening.done) return;
   for (const id of campaign.opening.orders) {
     const order = state.orders[id];
     if (order !== undefined && order.manualAt < 0 && state.step >= order.tOrder + clickDelay) {
-      applyCommand(state, { type: 'prioritizeOrder', order: id });
+      run({ type: 'prioritizeOrder', order: id });
     }
   }
 }
@@ -436,11 +525,17 @@ export function extractNodes(state: SimState, purchases: readonly PurchaseRecord
     firstChoice: choices.length > 0 ? Math.min(...choices) : null,
     office3: starAt(OFFICE, 3),
     campusShown: unlockAt(campaign.unlocks.showCampus),
+    campusOpened: first('openDistrict', CAMPUS),
+    campus3: starAt(CAMPUS, 3),
+    campus4: starAt(CAMPUS, 4),
+    ending: campaign.ending === null ? null : campaign.ending.step,
     selectOpen: unlockAt(campaign.unlocks.selectColumn),
     selectSet: cardStep,
     officeOpened: first('openDistrict', OFFICE),
     doubleBoxOpen,
     firstGate,
+    oldStreet4: starAt(OLD, 4),
+    office4: starAt(OFFICE, 4),
   };
 }
 
@@ -460,6 +555,24 @@ function crossRiverOf(state: SimState, purchases: readonly PurchaseRecord[]): Cr
   return { openStep: open.step, orders, fromOld };
 }
 
+/** 数每个游戏日两场高峰的下单时段内，送往各片区的订单。days 带小数时（玩到某一天的中途），最后不满一天的那天也数。 */
+export function peakOrdersOf(state: SimState, days: number): PeakOrders {
+  const districts = campaignOf(state).districts.length;
+  const span = Math.ceil(days);
+  const make = (): number[][] => Array.from({ length: span }, () => new Array<number>(districts).fill(0));
+  const out: PeakOrders = { noon: make(), evening: make() };
+  for (const o of state.orders) {
+    const day = Math.floor(o.tOrder / DAY_STEPS);
+    if (day >= span) continue;
+    const tick = o.tOrder % DAY_STEPS;
+    const peak = tick >= NOON_WINDOW.start && tick < NOON_WINDOW.end ? out.noon : tick >= EVENING_WINDOW.start && tick < EVENING_WINDOW.end ? out.evening : null;
+    if (peak === null) continue;
+    const row = peak[day] as number[];
+    row[o.district] = (row[o.district] as number) + 1;
+  }
+  return out;
+}
+
 /**
  * 按一种玩法从开局玩 days 个游戏日。最后一天的日结在第 days × 3600 步开始时才做，所以多走一步，让它进记录。
  * 返回这一局的记录和结束时的状态（测试要看状态）。
@@ -472,6 +585,9 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
   const state = createState({ mode: 'campaign', seed });
   const campaign = campaignOf(state);
   campaign.money += options.startMoney ?? 0;
+  // 要对照时，命令和推进都经过 createPlay，由它持有每场高峰的副本。否则直接用核心的函数
+  const play = options.shadow === true ? createPlay(state) : null;
+  const run = (command: Command): CommandResult => (play === null ? applyCommand(state, command) : play.command(command));
 
   const purchases: PurchaseRecord[] = [];
   const snapshots: { balance: number; stations: number; drones: number; bays: number }[] = [];
@@ -485,7 +601,7 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
     for (const command of shoppingList(state, spec)) {
       const quote = quoteCommand(state, command);
       if (quote.ok) {
-        const result = applyCommand(state, command);
+        const result = run(command);
         if (!result.ok) return false;
         const at = state.step;
         purchases.push({ step: at, type: command.type, target: targetOf(command), price: quote.price, gap: at - lastPurchase, saving, balance: campaign.money });
@@ -503,17 +619,19 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
 
   const total = days * DAY_STEPS + 1;
   for (let i = 0; i < total; i++) {
-    clickOpening(state, clickDelay);
+    options.onStep?.(state);
+    clickOpening(state, clickDelay, run);
     if (state.step % decideEvery === 0) {
-      for (const command of ruleCommands(state, spec)) {
-        if (applyCommand(state, command).ok) {
+      for (const command of ruleCommands(state, spec, options.selectCards)) {
+        if (run(command).ok) {
           cardChanges += 1;
           if (cardStep === null) cardStep = state.step;
         }
       }
       for (let n = 0; n < MAX_BUYS_PER_DECISION; n++) if (!buyNext()) break;
     }
-    step(state);
+    if (play === null) step(state);
+    else play.step();
     if (state.step % DAY_STEPS === 0) {
       // 一天最后一步结束，日结之前
       const live = liveStations(state);
@@ -549,6 +667,7 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
     days,
     nodes: extractNodes(state, purchases, cardStep),
     daily,
+    peakOrders: peakOrdersOf(state, days),
     purchases,
     cardChanges,
     maxGap: purchases.reduce((m, p) => Math.max(m, p.gap), 0),
@@ -566,5 +685,10 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
     },
     hash: hashState(state),
   };
+  if (play !== null) {
+    const gains = campaign.peaks.map((p) => (p.baseline === null ? null : p.onTime - p.baseline.onTime));
+    const known = gains.filter((g): g is number => g !== null);
+    record.shadow = { compared: known.length, total: known.reduce((sum, g) => sum + g, 0), gains };
+  }
   return { record, state };
 }

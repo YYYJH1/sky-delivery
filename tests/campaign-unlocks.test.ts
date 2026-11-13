@@ -1,5 +1,5 @@
 // 解锁：每一条解锁都测开放之前命令失败、状态不变，开放之后可用，以及开放的时机和边界。
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { UNLOCKS_V1 } from '../src/content/unlocks_v1.ts';
 import {
@@ -66,7 +66,8 @@ function peakSummaryWith(state: SimState, peak: 'noon' | 'evening', orders: Peak
 
 const noonSummary = (state: SimState, orders: PeakOrders): void => peakSummaryWith(state, 'noon', orders);
 
-describe('价签：第一次日结之后余额达到 140（停机位的价格）时开放', () => {
+describe('价签：第一次日结之后余额达到内容表里的数（停机位的价格）时开放', () => {
+  const BALANCE = UNLOCKS_V1.priceTagsBalance;
   const PURCHASES: Command[] = [
     { type: 'buildStation', roof: OLD_SMALL },
     { type: 'buyDrone', station: 0 },
@@ -76,7 +77,7 @@ describe('价签：第一次日结之后余额达到 140（停机位的价格）
     { type: 'buyNearestLanding' },
   ];
 
-  it('开局锁着：建站、添飞机、加停机位、起降口升级、双层货箱、就近降落都失败，原因是 priceTagsLocked，状态一点不变', () => {
+  it('开局锁着：建站、购买无人机、新增停机位、起降口升级、双层货箱、就近降落都失败，原因是 priceTagsLocked，状态一点不变', () => {
     const state = lockedState();
     expect(isUnlocked(state, 'priceTags')).toBe(false);
     for (const command of PURCHASES) expectRejected(state, command, 'priceTagsLocked');
@@ -85,12 +86,12 @@ describe('价签：第一次日结之后余额达到 140（停机位的价格）
 
   it('只读的价签也给出同样的原因，并且仍给出价格，供界面决定怎么显示', () => {
     const state = lockedState();
-    expect(quoteCommand(state, { type: 'buyBay', station: 0 })).toEqual({ ok: false, reason: 'priceTagsLocked', kind: 'buy', price: 140 });
-    expect(quoteCommand(state, { type: 'buyDrone', station: 0 })).toEqual({ ok: false, reason: 'priceTagsLocked', kind: 'buy', price: 100 });
+    expect(quoteCommand(state, { type: 'buyBay', station: 0 })).toEqual({ ok: false, reason: 'priceTagsLocked', kind: 'buy', price: ECONOMY_V1.bayBase });
+    expect(quoteCommand(state, { type: 'buyDrone', station: 0 })).toEqual({ ok: false, reason: 'priceTagsLocked', kind: 'buy', price: ECONOMY_V1.droneBase });
     expect(quoteCommand(state, { type: 'buyDoubleBox' })).toEqual({ ok: false, reason: 'priceTagsLocked', kind: 'buy', price: ECONOMY_V1.doubleBoxPrice });
   });
 
-  it('不是价签的命令照常可用：换规矩卡和点击订单不受价签影响', () => {
+  it('不是价签的命令照常可用：换策略卡和点击订单不受价签影响', () => {
     const state = lockedState();
     const order = outcomeOrder(state, { district: 0, tOrder: 0 });
     expect(must(state, { type: 'prioritizeOrder', order: order.id })).toBe(order.id);
@@ -104,34 +105,34 @@ describe('价签：第一次日结之后余额达到 140（停机位的价格）
     expect(isUnlocked(state, 'priceTags')).toBe(false);
   });
 
-  it('日结时余额达到 140：当场开放，记下日结的那一步，同时放出便签', () => {
+  it('日结时余额达到门槛：当场开放，记下日结的那一步，同时放出便签', () => {
     const state = quietState({}, false);
     advance(state, DAY_STEPS);
-    campaignOf(state).money = 140;
+    campaignOf(state).money = BALANCE;
     step(state); // 第 3600 步：日结
     expect(campaignOf(state).days.length).toBe(1);
     expect(stepOf(state, 'priceTags')).toBe(DAY_STEPS);
     expect(campaignOf(state).tips.filter((t) => t.id === 'canAddBay').map((t) => t.step)).toEqual([DAY_STEPS]);
   });
 
-  it('日结时余额不到 140：不开放，之后余额达到 140 的那一步开放，不必等下一次日结', () => {
+  it('日结时余额不到门槛：不开放，之后余额达到门槛的那一步开放，不必等下一次日结', () => {
     const state = quietState({}, false);
     advance(state, DAY_STEPS);
-    campaignOf(state).money = 139.99;
+    campaignOf(state).money = BALANCE - 0.01;
     step(state); // 第 3600 步：日结，余额差 0.01
     expect(campaignOf(state).days.length).toBe(1);
     expect(isUnlocked(state, 'priceTags')).toBe(false);
     expect(campaignOf(state).tips.some((t) => t.id === 'canAddBay')).toBe(false);
     advance(state, 50);
     expect(isUnlocked(state, 'priceTags')).toBe(false);
-    campaignOf(state).money = 140;
+    campaignOf(state).money = BALANCE;
     step(state);
     expect(isUnlocked(state, 'priceTags')).toBe(true);
     expect(stepOf(state, 'priceTags')).toBe(DAY_STEPS + 51);
     expect(campaignOf(state).tips.filter((t) => t.id === 'canAddBay').length).toBe(1);
   });
 
-  it('开放之后命令可用，余额再掉到 140 以下也不会再锁上', () => {
+  it('开放之后命令可用，余额再掉到门槛以下也不会再锁上', () => {
     const state = quietState({}, false);
     advance(state, DAY_STEPS);
     campaignOf(state).money = 500;
@@ -146,13 +147,13 @@ describe('价签：第一次日结之后余额达到 140（停机位的价格）
   });
 });
 
-describe('「先送哪张单」一栏：高峰小结里超时的订单超过来单的一定比例，最晚在第二天的日结时开放', () => {
+describe('「调度策略」一栏：高峰小结里超时的订单超过来单的一定比例，最晚在第二天的日结时开放', () => {
   it('内容表里的门槛是一成半（初值是三成）：老街来单降到 11 以后第一场午高峰超时超过三成的种子少了', () => {
     expect(UNLOCKS_V1.selectLateAbove).toBe(15);
     expect(UNLOCKS_V1.selectLatestDay).toBe(1);
   });
 
-  it('开局锁着：整栏都锁着，包括「先下单的先送」，原因是 ruleLocked，状态不变', () => {
+  it('开局锁着：整栏都锁着，包括「先到先送」，原因是 ruleLocked，状态不变', () => {
     const state = lockedState();
     expectRejected(state, { type: 'setRules', rules: { select: 'deadline' } }, 'ruleLocked');
     expectRejected(state, { type: 'setRules', rules: { select: 'fifo' } }, 'ruleLocked');
@@ -178,7 +179,7 @@ describe('「先送哪张单」一栏：高峰小结里超时的订单超过来�
     if (opens) expect(stepOf(state, 'selectColumn')).toBe(NOON);
   });
 
-  it('开放时同时开放「快超时的先送」，放出「调度台可以用了」的便签，只出现一次', () => {
+  it('开放时同时开放「时限优先」，放出「调度台已解锁」的便签，只出现一次', () => {
     const state = quietState({}, false);
     noonSummary(state, { onTime: 5, late: 5 });
     expect(ruleOpen(state, 'select', 'fifo')).toBe(true);
@@ -193,7 +194,7 @@ describe('「先送哪张单」一栏：高峰小结里超时的订单超过来�
     expect(stepOf(state, 'selectColumn')).toBe(NOON);
   });
 
-  it('开放之后「来回快的先送」和三张「某一片的先送」仍然锁着，各有自己的条件', () => {
+  it('开放之后「短程优先」和三张「{片区}优先」仍然锁着，各有自己的条件', () => {
     const state = quietState({}, false);
     noonSummary(state, { onTime: 5, late: 5 });
     for (const id of ['roundtrip', 'prioOld', 'prioOffice', 'prioCampus']) {
@@ -291,21 +292,21 @@ describe('双层货箱：停机位到屋顶上限之后，某场高峰小结的�
   });
 });
 
-describe('双层货箱：买下之后「一趟送几单」一栏开放，并且自动换成「顺路的一起送」', () => {
+describe('双层货箱：买下之后「合单策略」一栏开放，并且自动换成「顺路合并」', () => {
   function afterBox(): SimState {
     const state = withMoney(quietState());
     campaignOf(state).unlocks.poolColumn = -1;
     return state;
   }
 
-  it('买之前「一趟送几单」整栏锁着，ruleLocked，状态不变', () => {
+  it('买之前「合单策略」整栏锁着，ruleLocked，状态不变', () => {
     const state = afterBox();
     expect(isUnlocked(state, 'poolColumn')).toBe(false);
     for (const id of ['single', 'same', 'any']) expectRejected(state, { type: 'setRules', rules: { pool: id } }, 'ruleLocked');
     expect(ruleLock(state, 'pool', 'any')).toBe('poolColumn');
   });
 
-  it('买下的同时开放这一栏，这一栏从「一趟送一单」换成「顺路的一起送」，这次换卡不记进换卡记录，一起送的规矩立刻生效', () => {
+  it('买下的同时开放这一栏，这一栏从「单独配送」换成「顺路合并」，这次换卡不记进换卡记录，一起送的策略立刻生效', () => {
     const state = afterBox();
     expect(state.rules.pool).toBe('single');
     must(state, { type: 'buyDoubleBox' });
@@ -319,7 +320,7 @@ describe('双层货箱：买下之后「一趟送几单」一栏开放，并且�
     expect(state.stats.ruleChanges.map((c) => [c.column, c.from, c.to])).toEqual([['pool', 'any', 'same']]);
   });
 
-  it('这一栏已经不是「一趟送一单」时不替玩家换：配置里指定了「同一家店的一起送」，买了货箱仍是它', () => {
+  it('这一栏已经不是「单独配送」时不替玩家换：配置里指定了「同店合并」，买了货箱仍是它', () => {
     const state = withMoney(quietState({ rules: { pool: 'same' } }));
     campaignOf(state).unlocks.poolColumn = -1;
     must(state, { type: 'buyDoubleBox' });
@@ -327,7 +328,7 @@ describe('双层货箱：买下之后「一趟送几单」一栏开放，并且�
     expect(state.stats.ruleChanges).toEqual([]);
   });
 
-  it('买了货箱之后，订单真的会一起送：同样的订单，载量 2 加「顺路的一起送」时有同乘', () => {
+  it('买了货箱之后，订单真的会一起送：同样的订单，载量 2 加「顺路合并」时有同乘', () => {
     const run = (buy: boolean): number => {
       const state = withMoney(quietState({ orderEndStep: null, seed: 42 }), 1000);
       campaignOf(state).opening.orders = [0, 1, 2, 3, 4];
@@ -340,7 +341,7 @@ describe('双层货箱：买下之后「一趟送几单」一栏开放，并且�
   });
 });
 
-describe('「别的站帮不帮」一栏和就近降落：有两座以上没退回的站', () => {
+describe('「协同策略」一栏和就近降落：有两座以上没退回的站', () => {
   function oneStation(): SimState {
     const state = withMoney(quietState());
     campaignOf(state).unlocks.zoneColumn = -1;
@@ -385,7 +386,84 @@ describe('「别的站帮不帮」一栏和就近降落：有两座以上没退�
   });
 });
 
-describe('某一片的先送：写字楼区连续两次日结没有升星，并且它的准时率比其他片区合在一起低 20 个百分点以上', () => {
+describe('{片区}优先：随写字楼区开通一起开放', () => {
+  const saved = UNLOCKS_V1.prioOpensWith;
+  afterEach(() => {
+    UNLOCKS_V1.prioOpensWith = saved;
+  });
+
+  /** 写字楼区已经显示、老街三星、有钱：可以用命令开通写字楼区。 */
+  function readyToOpenOffice(): SimState {
+    const state = withMoney(quietState({}, false));
+    const campaign = campaignOf(state);
+    campaign.unlocks.showOffice = 0;
+    campaign.unlocks.selectColumn = 0;
+    campaign.districts[0]!.star = 3;
+    return state;
+  }
+
+  it('内容表里是写字楼区：开通之前锁着，开通的那一步一起开放，同时午晚两套策略分开', () => {
+    expect(UNLOCKS_V1.prioOpensWith).toBe(UNLOCKS_V1.prioDistrict);
+    const state = readyToOpenOffice();
+    for (const id of ['prioOld', 'prioOffice', 'prioCampus']) expect(ruleLock(state, 'select', id)).toBe('prioDistrict');
+    expectRejected(state, { type: 'setRules', rules: { select: 'prioOffice' } }, 'ruleLocked');
+    advance(state, 7);
+    expect(isUnlocked(state, 'prioDistrict')).toBe(false);
+    must(state, { type: 'openDistrict', district: 1 });
+    expect(stepOf(state, 'prioDistrict')).toBe(7);
+    expect(stepOf(state, 'prioDistrict')).toBe(stepOf(state, 'ruleSets'));
+    for (const id of ['prioOld', 'prioOffice', 'prioCampus']) expect(ruleLock(state, 'select', id)).toBeNull();
+    must(state, { type: 'setRules', rules: { select: 'prioOffice' }, peak: 'noon' });
+    expect(campaignOf(state).ruleSets?.noon.select).toBe('prioOffice');
+  });
+
+  it('不用日结：开通当天没有日结记录，也没有准时率的统计，卡照样开放', () => {
+    const state = readyToOpenOffice();
+    must(state, { type: 'openDistrict', district: 1 });
+    expect(campaignOf(state).days).toHaveLength(0);
+    expect(ruleOpen(state, 'select', 'prioOffice')).toBe(true);
+  });
+
+  it('直接把片区标成开通（存档读出来的局面）：下一步开始时开放', () => {
+    const state = quietState({}, false);
+    campaignOf(state).unlocks.selectColumn = 0;
+    campaignOf(state).districts[1]!.open = true;
+    expect(isUnlocked(state, 'prioDistrict')).toBe(false);
+    step(state);
+    expect(isUnlocked(state, 'prioDistrict')).toBe(true);
+  });
+
+  it('开放之后不会再锁上，也不受准时率影响', () => {
+    const state = readyToOpenOffice();
+    must(state, { type: 'openDistrict', district: 1 });
+    const at = stepOf(state, 'prioDistrict');
+    batchOrders(state, 0, 0, { onTime: 10 });
+    batchOrders(state, 1, 0, { onTime: 10 });
+    settle(state, 0);
+    settle(state, 1);
+    expect(stepOf(state, 'prioDistrict')).toBe(at);
+  });
+
+  it('跟着内容表走：改成大学城时，开通写字楼区不开放，开通大学城才开放', () => {
+    UNLOCKS_V1.prioOpensWith = 2;
+    const state = readyToOpenOffice();
+    must(state, { type: 'openDistrict', district: 1 });
+    expect(isUnlocked(state, 'prioDistrict')).toBe(false);
+    campaignOf(state).districts[2]!.open = true;
+    step(state);
+    expect(isUnlocked(state, 'prioDistrict')).toBe(true);
+  });
+});
+
+describe('{片区}优先（内容表里 prioOpensWith 取 null）：写字楼区连续两次日结没有升星，并且它的准时率比其他片区合在一起低 20 个百分点以上', () => {
+  const saved = UNLOCKS_V1.prioOpensWith;
+  beforeEach(() => {
+    UNLOCKS_V1.prioOpensWith = null;
+  });
+  afterEach(() => {
+    UNLOCKS_V1.prioOpensWith = saved;
+  });
+
   /** 老街和写字楼区开通，第 0 天的订单：老街 oldOn / oldAll，写字楼区 officeOn / officeAll 准时，其余超时。 */
   function setup(old: [number, number], office: [number, number]): SimState {
     const state = quietState({}, false);
@@ -469,7 +547,7 @@ describe('某一片的先送：写字楼区连续两次日结没有升星，并�
     expect(isUnlocked(other, 'prioDistrict')).toBe(false);
   });
 
-  it('开放三张「某一片的先送」，之前 ruleLocked', () => {
+  it('开放三张「{片区}优先」，之前 ruleLocked', () => {
     const state = setup([7, 10], [5, 10]);
     campaignOf(state).unlocks.selectColumn = 0;
     for (const id of ['prioOld', 'prioOffice', 'prioCampus']) expectRejected(state, { type: 'setRules', rules: { select: id } }, 'ruleLocked');
@@ -479,26 +557,56 @@ describe('某一片的先送：写字楼区连续两次日结没有升星，并�
   });
 });
 
-describe('「来回快的先送」、显示写字楼区、显示大学城：看星级', () => {
-  it('写字楼区到三星：「来回快的先送」开放，大学城显示，之前锁着', () => {
+/** 内容表里显示大学城要写字楼区到的星级。 */
+const CAMPUS_SHOWN_STAR = (UNLOCKS_V1.show.find((r) => r.district === 2) as { star: number }).star;
+
+describe('「短程优先」、显示写字楼区、显示大学城：看星级', () => {
+  it('写字楼区到内容表里的星级：「短程优先」开放，之前锁着', () => {
     const state = quietState({}, false);
     campaignOf(state).unlocks.selectColumn = 0;
     const campaign = campaignOf(state);
     campaign.districts[0]!.star = 3;
     campaign.districts[1]!.open = true;
-    campaign.districts[1]!.star = 2;
+    campaign.districts[1]!.star = UNLOCKS_V1.roundtripStar - 1;
     expectRejected(state, { type: 'setRules', rules: { select: 'roundtrip' } }, 'ruleLocked');
     settle(state, 0);
     expect(isUnlocked(state, 'roundtrip')).toBe(false);
-    expect(isUnlocked(state, 'showCampus')).toBe(false);
-    campaign.districts[1]!.star = 3;
+    campaign.districts[1]!.star = UNLOCKS_V1.roundtripStar;
     settle(state, 1);
     expect(stepOf(state, 'roundtrip')).toBe(2 * DAY_STEPS);
-    expect(stepOf(state, 'showCampus')).toBe(2 * DAY_STEPS);
     must(state, { type: 'setRules', rules: { select: 'roundtrip' } });
   });
 
-  it('老街到三星：显示写字楼区，放出「河对岸的写字楼区可以开通了」的便签，之前开通写字楼区失败 districtHidden', () => {
+  it('写字楼区到内容表里的星级：大学城显示，之前不显示，开通大学城失败 districtHidden', () => {
+    const state = withMoney(quietState({}, false));
+    const campaign = campaignOf(state);
+    campaign.unlocks.showOffice = 0;
+    campaign.districts[0]!.star = 3;
+    campaign.districts[1]!.open = true;
+    campaign.districts[1]!.star = CAMPUS_SHOWN_STAR - 1;
+    settle(state, 0);
+    expect(isUnlocked(state, 'showCampus')).toBe(false);
+    expectRejected(state, { type: 'openDistrict', district: 2 }, 'districtHidden');
+    campaign.districts[1]!.star = CAMPUS_SHOWN_STAR;
+    settle(state, 1);
+    expect(stepOf(state, 'showCampus')).toBe(2 * DAY_STEPS);
+    must(state, { type: 'openDistrict', district: 2 });
+  });
+
+  it('大学城比写字楼区晚显示：写字楼区的星级低于显示大学城要的星级时，写字楼区已经三星的玩家看不到大学城', () => {
+    expect(CAMPUS_SHOWN_STAR).toBeGreaterThan(UNLOCKS_V1.roundtripStar);
+    const state = withMoney(quietState({}, false));
+    const campaign = campaignOf(state);
+    campaign.unlocks.showOffice = 0;
+    campaign.districts[0]!.star = 3;
+    campaign.districts[1]!.open = true;
+    campaign.districts[1]!.star = UNLOCKS_V1.roundtripStar;
+    settle(state, 0);
+    expect(isUnlocked(state, 'roundtrip')).toBe(true);
+    expect(isUnlocked(state, 'showCampus')).toBe(false);
+  });
+
+  it('老街到三星：显示写字楼区，放出「写字楼区已可开通」的便签，之前开通写字楼区失败 districtHidden', () => {
     const state = withMoney(quietState({}, false));
     campaignOf(state).unlocks.priceTags = 0;
     const campaign = campaignOf(state);
@@ -514,37 +622,40 @@ describe('「来回快的先送」、显示写字楼区、显示大学城：看�
     expect(must(state, { type: 'openDistrict', district: 1 })).toBe(1);
   });
 
-  it('大学城要写字楼区到三星才显示：写字楼区没开通或不到三星时开通大学城失败 districtHidden', () => {
+  it('写字楼区没开通时大学城不显示，开通大学城失败 districtHidden', () => {
     const state = withMoney(quietState({}, false));
     const campaign = campaignOf(state);
     campaign.unlocks.showOffice = 0;
     campaign.districts[0]!.star = 3;
-    must(state, { type: 'openDistrict', district: 1 });
-    campaign.districts[1]!.star = 3;
     expectRejected(state, { type: 'openDistrict', district: 2 }, 'districtHidden');
     settle(state, 0);
+    expect(isUnlocked(state, 'showCampus')).toBe(false);
+    must(state, { type: 'openDistrict', district: 1 });
+    campaign.districts[1]!.star = CAMPUS_SHOWN_STAR;
+    expectRejected(state, { type: 'openDistrict', district: 2 }, 'districtHidden'); // 星级到了，日结还没有确认
+    settle(state, 1);
     expect(isUnlocked(state, 'showCampus')).toBe(true);
     must(state, { type: 'openDistrict', district: 2 });
   });
 
-  it('已经开放的不会再锁上：掉星之后显示和「来回快的先送」仍然开放，开通片区要的星级仍按现在的算', () => {
+  it('已经开放的不会再锁上：掉星之后显示和「短程优先」仍然开放，开通片区要的星级仍按现在的算', () => {
     const state = withMoney(quietState({}, false));
     const campaign = campaignOf(state);
     campaign.unlocks.selectColumn = 0;
     campaign.districts[0]!.star = 3;
     campaign.districts[1]!.open = true;
-    campaign.districts[1]!.star = 3;
+    campaign.districts[1]!.star = CAMPUS_SHOWN_STAR;
     settle(state, 0);
     const opened = UNLOCK_KEYS.filter((key) => campaign.unlocks[key] >= 0);
     expect(opened).toEqual(expect.arrayContaining(['showOffice', 'showCampus', 'roundtrip']));
     const stepsBefore = opened.map((key) => campaign.unlocks[key]);
-    // 两个片区都掉到二星：连续两次日结没达到
-    batchOrders(state, 0, 1, { onTime: 1, late: 9 });
-    batchOrders(state, 1, 1, { onTime: 1, late: 9 });
-    settle(state, 1);
-    batchOrders(state, 0, 2, { late: 10 });
-    batchOrders(state, 1, 2, { late: 10 });
-    settle(state, 2);
+    // 每掉一星要连续两次日结没达到：写字楼区从显示大学城要的星级一路掉到二星需要 (星级 - 2) × 2 次日结，老街从三星掉到二星
+    const drops = (CAMPUS_SHOWN_STAR - 2) * 2;
+    for (let day = 1; day <= drops; day++) {
+      batchOrders(state, 0, day, { late: 10 });
+      batchOrders(state, 1, day, { late: 10 });
+      settle(state, day);
+    }
     expect(campaign.districts.map((d) => d.star)).toEqual([2, 2, 1]);
     expect(opened.map((key) => campaign.unlocks[key])).toEqual(stepsBefore);
     expect(ruleOpen(state, 'select', 'roundtrip')).toBe(true);

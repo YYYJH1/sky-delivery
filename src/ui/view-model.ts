@@ -1,6 +1,6 @@
 // 从状态算出界面数据：小票、日程纸条、价签、改装列表、每座站的小卡、候选屋顶，
 // 以及片区纸条、调度台、高峰小结和日结的长小票、便签、结局。
-// 界面里读游戏状态的地方都集中在这几个纯函数模块里（本文件、board.ts、note.ts、tickets.ts、tips.ts、tags.ts）。
+// 界面里读游戏状态的地方都集中在这几个纯函数模块里（本文件、board.ts、note.ts、live.ts、tickets.ts、tips.ts、tags.ts）。
 // 界面的部件只拿到这里算好的数据，不直接读状态。
 // 纯函数，不改状态，不碰 DOM，不读系统时钟。界面每秒最多算十次，所以要保持便宜。
 import { ECONOMY_V1 } from '../content/economy_v1.ts';
@@ -9,6 +9,8 @@ import { DAY_STEPS, DroneState, bayCap, fleetOf, isUnlocked, quoteCommand, stati
 import type { Command, SimState } from '../core/index.ts';
 import { computeBoard } from './board.ts';
 import type { BoardView } from './board.ts';
+import { liveView } from './live.ts';
+import type { LiveView } from './live.ts';
 import { wholeMoney } from './money.ts';
 import { noteDistrictFor, noteView, openDistricts } from './note.ts';
 import type { NoteView } from './note.ts';
@@ -65,6 +67,8 @@ export interface UiData {
   /** 当前时刻在一天里的位置，0 到 1。 */
   readonly dayFraction: number;
   readonly peak: PeakKey | null;
+  /** 高峰进行中各片区已有的结果和这一场的目标，不在高峰里为 null。 */
+  readonly live: LiveView | null;
   /** 余额，向下取整：显示的数够买什么，就真的能买。 */
   readonly balance: number;
   /** 今天的进账，按送达的那一天算。 */
@@ -88,7 +92,7 @@ export interface UiData {
   readonly note: NoteView;
   /** 已经开通的片区，点纸条上的片区名在它们之间轮换。 */
   readonly noteChoices: readonly number[];
-  /** 调度台，「先送哪张单」一栏开放之前为 null。 */
+  /** 调度台，「调度策略」一栏开放之前为 null。 */
   readonly board: BoardView | null;
   /** 最近的高峰小结，今天还没有小结时为 null。 */
   readonly summary: SummaryView | null;
@@ -172,6 +176,7 @@ export function computeUiData(state: SimState, view: UiView = DEFAULT_VIEW): UiD
     clock: clockText(state.step),
     dayFraction: dayFraction(state.step),
     peak: activePeak(state.step),
+    live: liveView(state),
     balance: wholeMoney(campaign.money),
     earned: wholeMoney(campaign.income[Math.floor(state.step / DAY_STEPS)] ?? 0),
     build: { tag: build, canEnter: candidates.length > 0 && stationCount(state) < ECONOMY_V1.maxStations, candidates },

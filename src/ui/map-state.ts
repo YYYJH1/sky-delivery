@@ -2,11 +2,16 @@
 // （站的小卡、开通价签贴着它们摆）。纯函数，只读状态，不碰 DOM。
 // 世界里的矩形是正的，转了角的画板和镜头的缩放平移在 src/render/camera.ts 里换算。
 import { MAP_V1 } from '../content/map_v1.ts';
+import { districtName } from '../content/strings.zh.ts';
+import type { DistrictIndex } from '../content/strings.zh.ts';
+import { bayCap } from '../core/index.ts';
 import type { SimState } from '../core/index.ts';
-import { fitCamera, worldRectToScreen } from '../render/camera.ts';
+import { MAX_ZOOM, fitCamera, snapToDevice, worldRectToScreen } from '../render/camera.ts';
 import type { Camera, Insets } from '../render/camera.ts';
-import type { StationRoof } from '../render/city-types.ts';
-import { planMapBoard } from '../render/map-spec.ts';
+import { LABEL_METRICS } from '../render/city.ts';
+import type { Label, StationRoof } from '../render/city-types.ts';
+import type { DistrictMode } from '../render/districts.ts';
+import { mapRegion, planMapBoard } from '../render/map-spec.ts';
 import type { MapPlan } from '../render/map-spec.ts';
 import type { Board, Rect } from '../render/geometry.ts';
 import { stationRoofRect } from '../render/scene.ts';
@@ -34,15 +39,86 @@ export function insetsFor(uiScale: number): Insets {
   return { top: 100 * uiScale, bottom: 24 * uiScale };
 }
 
-/** 窗口对应的镜头：整张地图转 7° 之后取外接框，放进窗口，顶部和底部留出界面的位置。 */
-export function cameraFor(view: WindowGeometry): Camera {
-  return fitCamera(MAP_PLAN.content, view.width, view.height, insetsFor(view.uiScale), view.dpr);
+/** 镜头要框住哪几个片区：下标是片区序号，真表示框住。cameraFor 和 contentFor 不给时三个片区都框。 */
+export type Framed = readonly boolean[];
+
+const ALL_FRAMED: Framed = DISTRICT_RECTS.map(() => true);
+
+/**
+ * 已经显示的片区就是镜头要框住的片区：淡画的和开通的算，还没显示的不算。
+ * 一个都没有显示时（不该出现）框第一个片区，镜头不会没有东西可框。
+ */
+export function framedOf(modes: readonly DistrictMode[]): Framed {
+  const framed = DISTRICT_RECTS.map((_, i) => modes[i] !== undefined && modes[i] !== 'hidden');
+  return framed.some((f) => f) ? framed : DISTRICT_RECTS.map((_, i) => i === 0);
+}
+
+/** 两组框住的片区是不是同一组。 */
+export function sameFramed(a: Framed, b: Framed): boolean {
+  return a.length === b.length && a.every((f, i) => f === b[i]);
+}
+
+/**
+ * 镜头要放进窗口的范围，画板坐标：框住的片区的外框加四周的留白（mapRegion），转 7° 之后取外接框。
+ * 三个片区都框住时就是整块画板。
+ */
+export function contentFor(framed: Framed = ALL_FRAMED): Rect {
+  const picked = DISTRICT_RECTS.filter((_, i) => framed[i] === true);
+  return MAP_PLAN.board.boundsOf(mapRegion(picked.length > 0 ? picked : DISTRICT_RECTS));
+}
+
+/** 调度台收起时占着窗口右边多宽，按 1920×1080 的尺寸写：白板 200 加右边距 24，再留 12 的空。 */
+export const BOARD_STRIP = 236;
+
+/** 让出调度台的位置之后，地图左边留的空，和左上角小票、左下角价签离窗口边的距离一样。 */
+export const SIDE_MARGIN = 24;
+
+/**
+ * 窗口对应的镜头：把框住的片区放进窗口，顶部和底部留出界面的位置。缩放不超过 MAX_ZOOM（按界面物件的缩放），
+ * 所以只有一个小片区时地图也不会放得比缩放 1 还大。
+ * 框住的片区宽，右边会压到调度台下面去（店名和街区被盖住）时，让出调度台的位置：地图放进左边 SIDE_MARGIN 和调度台之间，
+ * 缩放小一点，往左挪一点。只有老街，或者三个片区都在（窗口里左右本来就空着）时不用让。
+ */
+export function cameraFor(view: WindowGeometry, framed: Framed = ALL_FRAMED): Camera {
+  const content = contentFor(framed);
+  const insets = insetsFor(view.uiScale);
+  const cap = MAX_ZOOM * view.uiScale;
+  const whole = fitCamera(content, view.width, view.height, insets, view.dpr, cap);
+  const strip = BOARD_STRIP * view.uiScale;
+  const margin = SIDE_MARGIN * view.uiScale;
+  const right = whole.x + (content.x + content.w) * whole.scale;
+  if (right <= view.width - strip + 1e-6) return whole;
+  const narrow = fitCamera(content, view.width - strip - margin, view.height, insets, view.dpr, cap);
+  return { scale: narrow.scale, x: snapToDevice(narrow.x + margin, view.dpr), y: narrow.y };
 }
 
 /** 站建在哪块候选屋顶上（地图 v1 里 roofs 的下标）。没有经营模式的记录时为 null。 */
 export function roofIndexOfStation(state: SimState, station: number): number | null {
   const info = state.campaign?.stations[station];
   return info === undefined ? null : info.roof;
+}
+
+/**
+ * 片区名在世界里占的矩形：字距拉开，字的中心在城市里记的位置上，宽度是字数乘字号加字距，高度大约一个字号加上下的描边。
+ * 只算已经显示的片区。选屋顶时文字躲着它，不盖在片区名上。
+ */
+export function districtLabelRects(labels: readonly Label[], modes: readonly DistrictMode[]): Rect[] {
+  const { font, spacing } = LABEL_METRICS;
+  const out: Rect[] = [];
+  for (const label of labels) {
+    if ((modes[label.district] ?? 'hidden') === 'hidden') continue;
+    const chars = [...districtName(label.district as DistrictIndex)].length;
+    const w = chars * font + (chars - 1) * spacing + 8;
+    out.push({ x: label.x - w / 2, y: label.y - 16, w, h: 36 });
+  }
+  return out;
+}
+
+/** 站所在的屋顶最多放几个停机位，取自屋顶的大小（核心的 bayCap）。没有经营模式的记录、屋顶不在地图里时为 null。 */
+export function bayLimitOf(state: SimState, station: number): number | null {
+  const roof = roofIndexOfStation(state, station);
+  const info = roof === null ? undefined : MAP_V1.roofs[roof];
+  return info === undefined ? null : bayCap(info.size);
 }
 
 /** 店有没有开张。沙盒模式的店一直开着。 */

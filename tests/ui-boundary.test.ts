@@ -11,6 +11,7 @@ const UI = join(SRC, 'ui');
 const CORE_INDEX = join(SRC, 'core', 'index.ts');
 const APP_INDEX = join(SRC, 'app', 'index.ts');
 const SAVE_INDEX = join(SRC, 'save', 'index.ts');
+const AUDIO_INDEX = join(SRC, 'audio', 'index.ts');
 
 function listFiles(dir: string, accept: (name: string) => boolean): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
@@ -81,6 +82,11 @@ describe('界面层的源文件都在', () => {
       'components.tsx',
       'board-panel.tsx',
       'ticket-panels.tsx',
+      'sheets.tsx',
+      'paper.ts',
+      'paper-use.ts',
+      'hand.ts',
+      'tip-anchor.ts',
       'note-panels.tsx',
       'game.ts',
       'state.ts',
@@ -112,7 +118,7 @@ describe('界面层的源文件都在', () => {
 describe('引用关系', () => {
   const PACKAGES = ['preact', 'preact/hooks', '@preact/signals'];
 
-  it('src/ui 只引用自己的文件、src/core/index.ts、src/app/index.ts、src/save/index.ts、内容表、渲染模块，以及 preact 和 signals', () => {
+  it('src/ui 只引用自己的文件、src/core/index.ts、src/app/index.ts、src/save/index.ts、src/audio/index.ts、内容表、渲染模块，以及 preact 和 signals', () => {
     const bad: string[] = [];
     for (const file of UI_FILES) {
       for (const imp of importsOf(file)) {
@@ -124,7 +130,7 @@ describe('引用关系', () => {
         const inUi = target.startsWith(`${UI}/`) && /\.tsx?$/.test(target);
         const inContent = target.startsWith(`${join(SRC, 'content')}/`) && target.endsWith('.ts');
         const inRender = target.startsWith(`${join(SRC, 'render')}/`) && target.endsWith('.ts');
-        const allowed = inUi || inContent || inRender || target === CORE_INDEX || target === APP_INDEX || target === SAVE_INDEX;
+        const allowed = inUi || inContent || inRender || target === CORE_INDEX || target === APP_INDEX || target === SAVE_INDEX || target === AUDIO_INDEX;
         if (!allowed) bad.push(`${name(file)}: ${imp.specifier}`);
       }
     }
@@ -176,7 +182,7 @@ describe('部件不碰游戏状态', () => {
     'refreshShops',
     'saveGame',
     'loadGame',
-    // 开放、便签、日结、小结、两套规矩、离开结算，改的也是游戏状态
+    // 开放、便签、日结、小结、两套策略、离开结算，改的也是游戏状态
     'unlock',
     'refreshUnlocks',
     'markTipRead',
@@ -202,8 +208,8 @@ describe('部件不碰游戏状态', () => {
   /** 界面的部件：components.tsx 和另外几个 .tsx（入口 main.tsx 除外）。 */
   const PANELS = UI_FILES.filter((f) => f.endsWith('.tsx') && base(f) !== 'main.tsx');
 
-  it('部件（components.tsx、board-panel.tsx、ticket-panels.tsx、note-panels.tsx）不引用核心，也不引用存档和运行循环：它们只读 state.ts 里的界面数据', () => {
-    expect(PANELS.map(base).sort()).toEqual(['board-panel.tsx', 'components.tsx', 'note-panels.tsx', 'ticket-panels.tsx']);
+  it('部件（components.tsx、board-panel.tsx、ticket-panels.tsx、note-panels.tsx、sheets.tsx）不引用核心，也不引用存档和运行循环：它们只读 state.ts 里的界面数据', () => {
+    expect(PANELS.map(base).sort()).toEqual(['board-panel.tsx', 'components.tsx', 'note-panels.tsx', 'sheets.tsx', 'ticket-panels.tsx']);
     const bad = PANELS.flatMap((file) => importsOf(file).filter((i) => /\/(core|save|app)\//.test(i.specifier) || /\/(core|save|app)\/index/.test(i.specifier)).map((i) => `${base(file)}: ${i.specifier}`));
     expect(bad).toEqual([]);
   });
@@ -223,8 +229,8 @@ describe('部件不碰游戏状态', () => {
 });
 
 describe('纯函数模块不碰 DOM、定时器和系统时钟', () => {
-  /** 碰浏览器的文件：入口、画布绘制、部件、运行（game.ts）。其余都是纯函数，测试在 node 里直接调用。 */
-  const IMPURE = ['main.tsx', 'components.tsx', 'board-panel.tsx', 'ticket-panels.tsx', 'note-panels.tsx', 'map-view.ts', 'game.ts'];
+  /** 碰浏览器的文件：入口、画布绘制、部件（含纸和量大小的 hook）、运行（game.ts）。其余都是纯函数，测试在 node 里直接调用。 */
+  const IMPURE = ['main.tsx', 'components.tsx', 'board-panel.tsx', 'ticket-panels.tsx', 'note-panels.tsx', 'sheets.tsx', 'paper.ts', 'paper-use.ts', 'map-view.ts', 'game.ts'];
 
   it('其余文件里没有 document、window、navigator、存储、定时器、动画帧、Date 和随机数', () => {
     const bad: string[] = [];
@@ -305,25 +311,25 @@ describe('依赖、类型检查和页面', () => {
   });
 
   it('src/ui 有 tsconfig：JSX 用 react-jsx 和 preact，并且在 npm run typecheck 和根配置的引用里', () => {
-    const config = JSON.parse(readFileSync(join(ROOT, 'tsconfig.ui.json'), 'utf8')) as {
+    const config = JSON.parse(readFileSync(join(UI, 'tsconfig.json'), 'utf8')) as {
       compilerOptions: { jsx: string; jsxImportSource: string };
       include: string[];
     };
     expect(config.compilerOptions.jsx).toBe('react-jsx');
     expect(config.compilerOptions.jsxImportSource).toBe('preact');
-    expect(config.include).toEqual(['src/ui']);
-    expect(pkg.scripts.typecheck).toContain('tsc -p tsconfig.ui.json');
+    expect(config.include).toEqual(['.', '../audio']);
+    expect(pkg.scripts.typecheck).toContain('tsc -p src/ui/tsconfig.json');
     const root = JSON.parse(readFileSync(join(ROOT, 'tsconfig.json'), 'utf8')) as { references: { path: string }[] };
-    expect(root.references.map((r) => r.path)).toContain('./tsconfig.ui.json');
+    expect(root.references.map((r) => r.path)).toContain('./src/ui/tsconfig.json');
   });
 
-  it('Vite：构建入口里有游戏页面 index.html，资源写成相对路径，开发服务器只监听本机', async () => {
+  it('Vite：构建入口只有游戏页面 index.html，资源写成相对路径，开发服务器只监听本机', async () => {
     const { default: config } = (await import('../vite.config.ts')) as {
       default: { base: string; server: { host: string }; build: { rollupOptions: { input: Record<string, string> } } };
     };
     expect(config.base).toBe('./');
     expect(config.server.host).toBe('127.0.0.1');
-    expect(Object.keys(config.build.rollupOptions.input)).toContain('index');
+    expect(Object.keys(config.build.rollupOptions.input)).toEqual(['index']);
   });
 
   it('index.html 是游戏页面：一块地图画布，一个界面容器，入口是 src/ui/main.tsx，字体样式表在 public/fonts，不引用外部的脚本和样式', () => {

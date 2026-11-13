@@ -71,9 +71,10 @@ export function unlock(state: SimState, key: UnlockKey): boolean {
 
 /**
  * 检查靠状态本身判断的开放项。每步开始时调用，每个命令执行之后也调用，所以命令的效果马上看得到。
- * - 有两座以上没退回的站：「别的站帮不帮」一栏（三张卡同时开放）和就近降落
- * - 载量不小于双层货箱的载量，也就是买了双层货箱：「一趟送几单」一栏
- * - 开通写字楼区：午晚两套规矩，同时把现在的规矩分成两套
+ * - 有两座以上没退回的站：「协同策略」一栏（三张卡同时开放）和就近降落
+ * - 载量不小于双层货箱的载量，也就是买了双层货箱：「合单策略」一栏
+ * - 开通写字楼区：午晚两套策略，同时把现在的策略分成两套
+ * - 开通内容表 UNLOCKS_V1.prioOpensWith 指定的片区（写字楼区）：「{片区}优先」。内容表里这一项是 null 时不在这里开放，由日结判断
  * - 第一次日结之后余额达到内容表 UNLOCKS_V1.priceTagsBalance：价签
  */
 export function refreshUnlocks(state: SimState): void {
@@ -87,13 +88,14 @@ export function refreshUnlocks(state: SimState): void {
     splitRuleSets(state);
     unlock(state, 'ruleSets');
   }
+  if (UNLOCKS_V1.prioOpensWith !== null && campaign.districts[UNLOCKS_V1.prioOpensWith]?.open === true) unlock(state, 'prioDistrict');
   if (campaign.days.length >= 1 && campaign.money >= UNLOCKS_V1.priceTagsBalance) unlock(state, 'priceTags');
 }
 
 /**
- * 一张规矩卡现在是哪一项锁着的，没锁时为 null。界面按它写「未开放」的条件。经营模式的调度台里没有的卡不在这里管，见 ruleOffered。
- * 「先送哪张单」一栏没开放时整栏都锁着，包括「先下单的先送」。栏开放之后，「快超时的先送」随栏开放，
- * 「来回快的先送」和三张「某一片的先送」各自有自己的条件。「别的站帮不帮」和「一趟送几单」整栏一起开放。
+ * 一张策略卡现在是哪一项锁着的，没锁时为 null。界面按它写「未开放」的条件。经营模式的调度台里没有的卡不在这里管，见 ruleOffered。
+ * 「调度策略」一栏没开放时整栏都锁着，包括「先到先送」。栏开放之后，「时限优先」随栏开放，
+ * 「短程优先」和三张「{片区}优先」各自有自己的条件。「协同策略」和「合单策略」整栏一起开放。
  */
 export function ruleLock(state: SimState, column: RuleColumn, id: string): UnlockKey | null {
   if (state.campaign === null) return null;
@@ -106,14 +108,14 @@ export function ruleLock(state: SimState, column: RuleColumn, id: string): Unloc
 }
 
 /**
- * 这张规矩卡在这一局里是不是玩家能选的卡。沙盒模式的卡都能选。
- * 经营模式只有内容表 CAMPAIGN_RULES_V1 列出的，注册表里别的卡（例如「一趟送一单」）玩家选不到，也不会开放。
+ * 这张策略卡在这一局里是不是玩家能选的卡。沙盒模式的卡都能选。
+ * 经营模式只有内容表 CAMPAIGN_RULES_V1 列出的，注册表里别的卡（例如「单独配送」）玩家选不到，也不会开放。
  */
 export function ruleOffered(state: SimState, column: RuleColumn, id: string): boolean {
   return state.campaign === null || CAMPAIGN_RULES_V1[column].includes(id);
 }
 
-/** 这张规矩卡能不能选：经营模式里要在内容表里，并且它所在的栏和它自己的开放条件都满足。 */
+/** 这张策略卡能不能选：经营模式里要在内容表里，并且它所在的栏和它自己的开放条件都满足。 */
 export function ruleOpen(state: SimState, column: RuleColumn, id: string): boolean {
   return ruleOffered(state, column, id) && ruleLock(state, column, id) === null;
 }

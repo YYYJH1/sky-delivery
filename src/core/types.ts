@@ -12,9 +12,9 @@ export type ReturnRule = 'home' | 'nearest';
 
 /** 调度台上三栏各选中的一张卡（规则编号）。 */
 export interface RuleSet {
-  select: string; // 先送哪张单
-  zone: string; // 别的站帮不帮
-  pool: string; // 一趟送几单
+  select: string; // 调度策略
+  zone: string; // 协同策略
+  pool: string; // 合单策略
 }
 
 export type RuleColumn = keyof RuleSet;
@@ -146,7 +146,7 @@ export interface Order {
 export interface EarlyEvent {
   step: number; // 派出的步
   order: number;
-  rule: string; // 当时生效的「先送哪张单」
+  rule: string; // 当时生效的「调度策略」
   day: number; // 订单下单所属的游戏日
   peak: number; // 订单下单所属的高峰（PeakId），不在高峰内为 -1
 }
@@ -195,7 +195,7 @@ export interface CampaignOpening {
   done: boolean; // 五张开局订单都有了结果：自动派单打开，随机订单开始产生
 }
 
-// ---- 经营模式：口碑、解锁、两套规矩、日结和小结的记录、便签、结局 ----
+// ---- 经营模式：口碑、解锁、两套策略、日结和小结的记录、便签、结局 ----
 // 这些字段都在 state.campaign 里，进状态哈希，随存档保存。记录一经生成不再修改。
 // 没有 NaN 和 Infinity：没有订单时的比率写 null，百分数是下取整的整数。
 
@@ -207,10 +207,10 @@ export interface DistrictRating {
 
 /**
  * 会逐步开放的东西。每一项在 campaign.unlocks 里记下开放的那一步，-1 表示还没开放。已经开放的不会再锁上。
- * selectColumn：「先送哪张单」一栏，带「快超时的先送」。priceTags：价签，也就是建站、添飞机、加停机位、起降口升级、双层货箱、就近降落。
- * doubleBox：双层货箱出现在改装里。poolColumn：「一趟送几单」一栏，买下双层货箱时开放。zoneColumn：「别的站帮不帮」一栏，三张卡同时开放。
- * nearestLanding：就近降落，要有两座以上的站。ruleSets：午晚两套规矩，开通写字楼区时开放。
- * prioDistrict：三张「某一片的先送」。roundtrip：「来回快的先送」。showOffice、showCampus：显示写字楼区、大学城和它们的开通价格。
+ * selectColumn：「调度策略」一栏，带「时限优先」。priceTags：价签，也就是建站、添飞机、加停机位、起降口升级、双层货箱、就近降落。
+ * doubleBox：双层货箱出现在改装里。poolColumn：「合单策略」一栏，买下双层货箱时开放。zoneColumn：「协同策略」一栏，三张卡同时开放。
+ * nearestLanding：就近降落，要有两座以上的站。ruleSets：午晚两套策略，开通写字楼区时开放。
+ * prioDistrict：三张「片区优先」。roundtrip：「短程优先」。showOffice、showCampus：显示写字楼区、大学城和它们的开通价格。
  */
 export type UnlockKey =
   | 'selectColumn'
@@ -227,7 +227,7 @@ export type UnlockKey =
 
 export type Unlocks = Record<UnlockKey, number>;
 
-/** 午高峰和晚高峰各一套规矩。 */
+/** 午高峰和晚高峰各一套策略。 */
 export interface RuleSets {
   noon: RuleSet;
   evening: RuleSet;
@@ -244,7 +244,7 @@ export interface NewShop {
 /**
  * 日结里一个片区的一行。kind 对应词表 dayEnd 里的一条：
  * starUp 升星（带 newShops），starDown 掉星，starKept 星级不变，noOrders 最近两天没有订单，
- * tooFewOrders 最近两天有结果的订单少于下限（STARS_V1.minSample），星级和计数都不变，n 和准时率照常记录，
+ * tooFewOrders 最近两天完成的订单少于下限（STARS_V1.minSample），星级和计数都不变，n 和准时率照常记录，
  * dropByOnTime 和 dropByCancel 是三星及以上这一次日结没有达到当前星级下面一档的条件、计数为 1 的情形。
  */
 export type DayLineKind = 'starUp' | 'starDown' | 'starKept' | 'noOrders' | 'tooFewOrders' | 'dropByOnTime' | 'dropByCancel';
@@ -269,13 +269,15 @@ export interface DayRecord {
   day: number; // 游戏日，从 0 数起
   step: number; // 做日结的那一步
   ordered: number; // 今天下单的订单数
-  resolved: number; // 今天有结果的订单数，按结果产生的那一步归日，等于 onTime + late + cancelled
+  resolved: number; // 今天完成的订单数，按结果产生的那一步归日，等于 onTime + late + cancelled
   onTime: number; // 准时送达
   late: number; // 超时送达
   cancelled: number; // 退单
-  pending: number; // 做日结时还没有结果的订单数，包括没派出的和已派出还没送到的
+  pending: number; // 做日结时还没完成的订单数，包括没派出的和已派出还没送到的
   income: number; // 今天的进账，按送达那一天计
   districts: DayDistrictRecord[]; // 每个开通的片区一行，按片区编号
+  peaksJudged: number; // 今天的高峰里判过目标的场数：至少有一个片区设了线，并且这个片区的订单够判的下限
+  peaksCleared: number; // 其中全部达标、并且没有退单的场数
 }
 
 /** 高峰小结说明的主句。id 对应词表 summary.main 的键，参数名与词表一致。 */
@@ -301,6 +303,31 @@ export interface PeakDistrictRow {
   onTime: number; // 其中准时送达的
   pct: number | null; // 准时率，下取整的百分数，没有订单为 null
   delta: number | null; // 与前一天同一场高峰相比的变化，单位是百分点，没有可比的（第一天、前一天没有订单）为 null
+  line: number | null; // 这一场的目标线：准时率，整数百分点。没有设线为 null
+  met: boolean | null; // 准时率达到了目标线。没有设线，或这一场送往这个片区的订单不够判的下限，为 null
+}
+
+/** 小结对照里一个片区的一行：同一批订单按开局策略的结果。 */
+export interface PeakBaselineRow {
+  district: number;
+  n: number; // 这一场里送往这个片区的订单数
+  onTime: number;
+  pct: number | null; // 准时率，下取整的百分数，没有订单为 null
+}
+
+/**
+ * 同一批订单、同样的购买，只把「调度策略」和「协同策略」换成开局的卡，算出的这一场的结果。
+ * 各项的含义与 PeakRecord 里同名的项相同。
+ */
+export interface PeakBaseline {
+  orders: number;
+  onTime: number;
+  late: number;
+  lateOpen: number;
+  cancelled: number;
+  revenue: number;
+  districts: PeakBaselineRow[];
+  lowLoad: boolean; // 这一场订单不多于运力：两种策略下订单平均等飞机的时间都低于内容表里的数
 }
 
 /** 一张订单的四段时间各占的百分数，四个数加起来是 100。 */
@@ -324,11 +351,39 @@ export interface PeakRecord {
   revenue: number; // 进账
   districts: PeakDistrictRow[]; // 生成时开通的片区，按片区编号
   segments: PeakSegments | null; // 只统计已经送达的订单，没有送达的订单时为 null
-  select: string; // 生成时「先送哪张单」的卡。是「先下单的先送」时界面不显示「提前派出」那一段
-  early: number | null; // 提前派出的订单数。这一场中途换过「先送哪张单」时为 null
-  changedMidPeak: boolean; // 这一场中途换过「先送哪张单」
+  select: string; // 生成时「调度策略」的卡。是「先到先送」时界面不显示「提前派出」那一段
+  early: number | null; // 提前派出的订单数。这一场中途换过「调度策略」时为 null
+  changedMidPeak: boolean; // 这一场中途换过「调度策略」
   main: MainSentence;
   extra: ExtraSentence | null;
+  cleared: boolean | null; // 判过的片区全部达标，并且这一场没有退单。没有判过的片区为 null
+  baseline: PeakBaseline | null; // 小结的对照。这一场没有对照（整场用的是开局的卡，或者开局时没有复制状态）为 null
+}
+
+/**
+ * 一场高峰里一个片区的目标线的种类：
+ * line 这一场要达到 line 的准时率，
+ * capped 按公式要求超过 100%，改用星级线本身，今晚的日结做不到，
+ * enough 这一场一单也不准时，日结时的准时率也已经达到星级线，不设线。
+ */
+export type GoalKind = 'line' | 'capped' | 'enough';
+
+/** 目标线按哪条星级线反推：升到下一星的线，或保住现在星级的线（五星和可能掉星的片区）。 */
+export type GoalBasis = 'next' | 'keep';
+
+export interface DistrictGoal {
+  district: number;
+  kind: GoalKind;
+  line: number | null; // 准时率，整数百分点。enough 时为 null
+  basis: GoalBasis;
+}
+
+/** 一场高峰开始时给各个开通的片区算出的目标，没有设线的片区不在里面。 */
+export interface PeakGoals {
+  day: number;
+  peak: PeakName;
+  step: number; // 算出的步，也就是这一场高峰的第一步
+  goals: DistrictGoal[];
 }
 
 export type TipId =
@@ -378,7 +433,7 @@ export interface CampaignState {
   stations: CampaignStation[]; // 与 state.stations 一一对应
   drones: Purchase[]; // 与 state.drones 一一对应
   opening: CampaignOpening;
-  // 以下是口碑、解锁、规矩、日结和小结、便签、结局的字段
+  // 以下是口碑、解锁、策略、日结和小结、便签、结局的字段
   rating: DistrictRating[]; // 与 districts 一一对应
   unlocks: Unlocks;
   ruleSets: RuleSets | null; // 开通写字楼区之前为 null，只有 state.rules 一套。分开之后 state.rules 是现在生效的那一套
@@ -387,6 +442,7 @@ export interface CampaignState {
   tips: TipRecord[]; // 便签队列，按出现的先后，已读的也留着
   delivered: number; // 到现在一共送达的订单数
   ending: Ending | null;
+  goals: PeakGoals | null; // 最近一场高峰的目标，还没有过高峰时为 null。小结生成时按它给各片区一行写达没达标
   // 以下是离开结算的字段
   away: AwayRecord[]; // 离开结算的记录，按结算的先后，最多留最近的 100 条
 }

@@ -31,7 +31,7 @@ import { BUSY, WALL, campaignScript, readJson, richCampaign, runState } from './
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** 一局打了五个游戏日的经营模式：两座站，九架飞机，两套规矩，日结、小结、便签的记录都有。 */
+/** 一局打了五个游戏日的经营模式：两座站，九架飞机，两套策略，日结、小结、便签的记录都有。 */
 const RICH: SimState = playGame('balanced', 7, { days: 5 }).state;
 
 function textOf(state: SimState, savedAt = WALL): string {
@@ -114,6 +114,18 @@ describe('校验：经营模式的字段表', () => {
     ['state.campaign.tips[0].read', 'yes', 'schema'],
     ['state.campaign.tips[0].id', 7, 'schema'],
     ['state.campaign.delivered', -0.5, 'schema'],
+    ['state.campaign.goals', 'none', 'schema'],
+    ['state.campaign.goals.day', 1.5, 'schema'],
+    ['state.campaign.goals.peak', 3, 'schema'],
+    ['state.campaign.goals.goals', {}, 'schema'],
+    ['state.campaign.goals.goals[0].kind', 3, 'schema'],
+    ['state.campaign.goals.goals[0].line', 'x', 'schema'],
+    ['state.campaign.peaks[0].cleared', 'yes', 'schema'],
+    ['state.campaign.peaks[0].baseline', 5, 'schema'],
+    ['state.campaign.peaks[0].districts[0].line', 'x', 'schema'],
+    ['state.campaign.peaks[0].districts[0].met', 1, 'schema'],
+    ['state.campaign.days[0].peaksJudged', 1.5, 'schema'],
+    ['state.campaign.days[0].peaksCleared', null, 'non-finite'],
     ['state.campaign.away', 3, 'schema'],
     ['state.capacity', '2', 'schema'],
     ['state.returnRule', 1, 'schema'],
@@ -134,7 +146,7 @@ describe('校验：经营模式的字段表', () => {
     expect(result.paths).toContain(path);
   });
 
-  it('可以为 null 的字段：没有订单的百分数、没有升星的店、两套规矩、结局，写成 null 或有值都通过', () => {
+  it('可以为 null 的字段：没有订单的百分数、没有升星的店、两套策略、结局，写成 null 或有值都通过', () => {
     // RICH 里这些字段有的是 null，有的有值。再造一个结局有值、小结里的四段时间为 null 的
     const input = tampered(RICH, (save) => {
       save.state.campaign.ending = { step: 100, days: 3, orders: 77 };
@@ -245,6 +257,27 @@ function legacyText(): string {
   return gunzipSync(readFileSync(join(HERE, 'fixtures', 'save-v1-campaign.json.gz'))).toString('utf8');
 }
 
+/** 版本 3 加的记录字段，版本 1 的存档还没有 away。把读进来的状态里的这些字段拿掉，就是旧存档里原来的样子。 */
+function withoutAddedFields(state: SimState, keepAway = false): SimState {
+  const copy = structuredClone(state) as unknown as { campaign: Record<string, any> };
+  const campaign = copy.campaign;
+  if (!keepAway) delete campaign.away;
+  delete campaign.goals;
+  for (const peak of campaign.peaks) {
+    delete peak.cleared;
+    delete peak.baseline;
+    for (const row of peak.districts) {
+      delete row.line;
+      delete row.met;
+    }
+  }
+  for (const day of campaign.days) {
+    delete day.peaksJudged;
+    delete day.peaksCleared;
+  }
+  return copy as unknown as SimState;
+}
+
 /** 样本里记着的事实，生成样本的当时从状态里读出来的。 */
 const LEGACY = {
   chars: 219_448,
@@ -301,12 +334,10 @@ describe('旧格式的存档（版本 1）', () => {
     expect(state.rules).toEqual(LEGACY.rules);
     expect(state.config.seed).toBe(LEGACY.seed);
     expect(campaign.ruleSets).not.toBeNull();
-    // 迁移只加了 away 这一个字段：把它拿掉，整个状态与样本里的逐字段相同
+    // 迁移只加了字段：away，以及版本 3 的记录字段。把它们拿掉，整个状态与样本里的逐字段相同
     expect(campaign.away).toEqual([]);
     const original = (JSON.parse(legacyText()) as { state: SimState }).state;
-    const withoutAway = structuredClone(state);
-    delete (withoutAway.campaign as { away?: unknown }).away;
-    expect(withoutAway).toEqual(original);
+    expect(withoutAddedFields(state)).toEqual(original);
   });
 
   it('外层的内容版本：版本 1 写的是字符串，迁移时取状态里记着的真正的内容版本，是一个整数', () => {
@@ -371,7 +402,7 @@ describe('旧格式的存档（版本 1）', () => {
     expect((await store.keys()).sort()).toEqual([slotKey('main')]);
   });
 
-  it('读进来之后再存：写成版本 2、压缩的写法，旧的 JSON 原文挪进备份一，两份都能读', async () => {
+  it('读进来之后再存：写成最新的版本、压缩的写法，旧的 JSON 原文挪进备份一，两份都能读', async () => {
     const legacy = legacyText();
     const store = new MemoryStore({ [slotKey('main')]: legacy });
     const loaded = await loadGame(store, WALL);
@@ -382,7 +413,7 @@ describe('旧格式的存档（版本 1）', () => {
     const main = (await store.get(slotKey('main'))) as string;
     expect(main.startsWith('SKYSAVE1.')).toBe(true);
     const raw = JSON.parse(await readJson(store, 'main')) as Record<string, any>;
-    expect(raw.version).toBe(2);
+    expect(raw.version).toBe(SAVE_VERSION);
     expect(raw.contentVersion).toBe(CONTENT_VERSION);
     expect(raw.state.campaign.away).toEqual([]);
     // 再读：主存档是新格式，没有迁移。主存档读不出来时，回退到旧格式的备份也能读
@@ -427,6 +458,166 @@ describe('旧格式的存档（版本 1）', () => {
     expect(failure(JSON.stringify(raw)).code).toBe('newer-version');
     const parsed = await parseStoredSave(await encodeSaveText(JSON.stringify(raw)));
     expect(!parsed.ok && parsed.reason.code).toBe('newer-version');
+  });
+});
+
+// ---- 版本 2 的存档 ----
+
+/** 存档模块的版本 2 写出的一份经营模式存档，打了五个游戏日。样本在 fixtures 里，gzip 压缩过。 */
+function v2Text(): string {
+  return gunzipSync(readFileSync(join(HERE, 'fixtures', 'save-v2-campaign.json.gz'))).toString('utf8');
+}
+
+/** 版本 2 样本里记着的事实，生成样本的当时从状态里读出来的。 */
+const V2 = {
+  chars: 219_455,
+  step: 18_001,
+  money: 116.90512628479615,
+  orders: 415,
+  delivered: 325,
+  days: 5,
+  peaks: 10,
+  tips: 6,
+  stars: [3, 1, 1],
+  rules: { select: 'prioOffice', zone: 'hybrid', pool: 'single' },
+  seed: 7,
+  savedAt: 1_731_400_000_000,
+};
+
+describe('旧格式的存档（版本 2）', () => {
+  it('样本确实是版本 2 的写法：没有 goals，小结里没有达标标记和对照，各片区一行没有目标线，日结里没有达标的场数', () => {
+    const text = v2Text();
+    expect(text).toHaveLength(V2.chars);
+    const raw = JSON.parse(text) as Record<string, any>;
+    expect(raw.version).toBe(2);
+    // 样本是内容版本 4 时写的，之后内容表再改，样本里记的版本不变
+    expect(raw.contentVersion).toBe(4);
+    expect(raw.savedAt).toBe(V2.savedAt);
+    const campaign = raw.state.campaign;
+    expect(campaign.goals).toBeUndefined();
+    expect(campaign.away).toEqual([]);
+    expect(campaign.peaks).toHaveLength(V2.peaks);
+    for (const peak of campaign.peaks) {
+      expect(peak.cleared).toBeUndefined();
+      expect(peak.baseline).toBeUndefined();
+      for (const row of peak.districts) expect([row.line, row.met]).toEqual([undefined, undefined]);
+    }
+    for (const day of campaign.days) expect([day.peaksJudged, day.peaksCleared]).toEqual([undefined, undefined]);
+  });
+
+  it('能读：先迁移再校验，新字段补默认值，已有的值一个没改', () => {
+    const result = parseSave(v2Text());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.migratedFrom).toBe(2);
+    expect(result.version).toBe(SAVE_VERSION);
+    expect(result.savedAt).toBe(V2.savedAt);
+    const state = result.state;
+    const campaign = campaignOf(state);
+    expect(state.step).toBe(V2.step);
+    expect(campaign.money).toBe(V2.money);
+    expect(state.orders).toHaveLength(V2.orders);
+    expect(campaign.delivered).toBe(V2.delivered);
+    expect(campaign.days).toHaveLength(V2.days);
+    expect(campaign.peaks).toHaveLength(V2.peaks);
+    expect(campaign.tips).toHaveLength(V2.tips);
+    expect(campaign.districts.map((d) => d.star)).toEqual(V2.stars);
+    expect(state.rules).toEqual(V2.rules);
+    expect(state.config.seed).toBe(V2.seed);
+    // 默认值：旧存档里的高峰没有设过目标，没有对照
+    expect(campaign.goals).toBeNull();
+    for (const peak of campaign.peaks) {
+      expect(peak.cleared).toBeNull();
+      expect(peak.baseline).toBeNull();
+      for (const row of peak.districts) expect([row.line, row.met]).toEqual([null, null]);
+    }
+    for (const day of campaign.days) expect([day.peaksJudged, day.peaksCleared]).toEqual([0, 0]);
+    // 迁移只加了字段：把它们拿掉，整个状态与样本里的逐字段相同
+    const original = (JSON.parse(v2Text()) as { state: SimState }).state;
+    expect(withoutAddedFields(state, true)).toEqual(original);
+  });
+
+  it('读进来的状态存出去再读回来，状态和哈希都不变，不再经过迁移', () => {
+    const result = parseSave(v2Text());
+    if (!result.ok) throw new Error('version 2 save should load');
+    const again = parseSave(textOf(result.state));
+    expect(again.ok && again.migratedFrom).toBeNull();
+    expect(again.ok && again.state).toEqual(result.state);
+    expect(again.ok && hashState(again.state)).toBe(hashState(result.state));
+  });
+
+  it('迁移过的状态接着玩：第一个高峰起算出目标，小结有达标一栏，日结有达标的场数，之后的存档照常读', () => {
+    const result = parseSave(v2Text());
+    if (!result.ok) throw new Error('version 2 save should load');
+    const state = result.state;
+    advance(state, 2 * DAY_STEPS);
+    const campaign = campaignOf(state);
+    expect(campaign.goals).not.toBeNull();
+    expect(campaign.peaks.length).toBeGreaterThan(V2.peaks);
+    const fresh = campaign.peaks.slice(V2.peaks);
+    expect(fresh.every((p) => p.cleared === null || typeof p.cleared === 'boolean')).toBe(true);
+    expect(fresh.some((p) => p.districts.some((d) => d.line !== null))).toBe(true);
+    const day = campaign.days[campaign.days.length - 1];
+    expect(day?.peaksJudged).toBeGreaterThanOrEqual(day?.peaksCleared ?? 0);
+    expect(parseSave(textOf(state)).ok).toBe(true);
+  });
+
+  it('版本 2 的存档内容有毛病，迁移之后照样被拦下', () => {
+    const raw = JSON.parse(v2Text()) as Record<string, any>;
+    delete raw.state.orders;
+    expect(failure(JSON.stringify(raw)).code).toBe('schema');
+    const raw2 = JSON.parse(v2Text()) as Record<string, any>;
+    raw2.state.campaign.money = null;
+    expect(failure(JSON.stringify(raw2)).code).toBe('non-finite');
+  });
+
+  it('存储里是版本 2 的 JSON 原文：读档照常读，读进来之后再存成最新的版本，旧文挪进备份一', async () => {
+    const legacy = v2Text();
+    const store = new MemoryStore({ [slotKey('main')]: legacy });
+    const loaded = await loadGame(store, WALL);
+    expect(loaded.status).toBe('ok');
+    expect(loaded.save?.migratedFrom).toBe(2);
+    expect(loaded.save?.fileVersion).toBe(2);
+    const state = loaded.state as SimState;
+    const saved = await saveGame(store, state, WALL + 1000);
+    expect(saved.ok).toBe(true);
+    expect(await store.get(slotKey('backup1'))).toBe(legacy);
+    const raw = JSON.parse(await readJson(store, 'main')) as Record<string, any>;
+    expect(raw.version).toBe(SAVE_VERSION);
+    expect(raw.state.campaign.goals).toBeNull();
+    expect(raw.state.campaign.peaks[0].baseline).toBeNull();
+  });
+
+  it('版本 3 的存档里有对照、目标和达标标记时，能存能读，对照的字段有毛病会被拦下', () => {
+    const state = structuredClone(RICH);
+    const campaign = campaignOf(state);
+    const peak = campaign.peaks[0]!;
+    peak.cleared = true;
+    peak.districts[0]!.line = 80;
+    peak.districts[0]!.met = true;
+    peak.baseline = { orders: 8, onTime: 5, late: 3, lateOpen: 1, cancelled: 0, revenue: 40.5, districts: [{ district: 0, n: 8, onTime: 5, pct: 62 }], lowLoad: false };
+    campaign.goals = { day: 4, peak: 'evening', step: 3 * DAY_STEPS + 2150, goals: [{ district: 0, kind: 'capped', line: 55, basis: 'keep' }, { district: 1, kind: 'enough', line: null, basis: 'next' }] };
+    const text = textOf(state);
+    const back = parseSave(text);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.state).toEqual(state);
+    expect(hashState(back.state)).toBe(hashState(state));
+    // 对照和目标里的字段类型不对
+    for (const [path, value] of [
+      ['state.campaign.peaks[0].baseline.onTime', 'five'],
+      ['state.campaign.peaks[0].baseline.lowLoad', 0],
+      ['state.campaign.peaks[0].baseline.districts[0].pct', 'x'],
+      ['state.campaign.goals.goals[1].line', 'x'],
+    ] as const) {
+      const input = tampered(state, (save) => {
+        const keys = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+        let node = save as Record<string, any>;
+        for (const key of keys.slice(0, -1)) node = node[key];
+        node[keys[keys.length - 1] as string] = value;
+      });
+      expect(failure(input).paths, path).toContain(path);
+    }
   });
 });
 

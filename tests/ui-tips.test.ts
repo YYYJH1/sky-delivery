@@ -1,5 +1,6 @@
 // 便签的队列和文字，结局的文字，界面怎么发现新出现的小结、日结和结局。
 import { describe, expect, it } from 'vitest';
+import { STR, fmt } from '../src/content/strings.zh.ts';
 import { DAY_STEPS, TIP_IDS, advance, applyCommand, pushTip } from '../src/core/index.ts';
 import type { TipId } from '../src/core/index.ts';
 import { freshSince, seenOf } from '../src/ui/notices.ts';
@@ -9,19 +10,19 @@ import { campaignOf, campaignState, runningState } from './campaign-helpers.ts';
 describe('便签的文字', () => {
   it('七条的文字都取自词表', () => {
     const expected: [TipId, string][] = [
-      ['firstOrder', '点一下这张单，派一架飞机去。'],
-      ['autoDispatchOn', '新订单会自动派出。'],
-      ['firstRedOrder', '想先送哪张，点它一下。'],
-      ['boardReady', '调度台可以用了。'],
-      ['canAddBay', '可以加一个停机位，再添一架飞机。'],
-      ['openOffice', '河对岸的写字楼区可以开通了。'],
+      ['firstOrder', STR.tips.firstOrder],
+      ['autoDispatchOn', STR.tips.autoDispatchOn],
+      ['firstRedOrder', STR.tips.firstRedOrder],
+      ['boardReady', STR.tips.boardReady],
+      ['canAddBay', STR.tips.canAddBay],
+      ['openOffice', STR.tips.openOffice],
     ];
     for (const [id, text] of expected) expect(tipText({ id, step: 0, station: null, read: false })).toBe(text);
   });
 
-  it('起降口忙不过来带站号：核心给的是编号，写成「{n}号站」的汉字', () => {
-    expect(tipText({ id: 'gateBusy', step: 0, station: 0, read: false })).toBe('一号站的起降口忙不过来。可以在改装里升级。');
-    expect(tipText({ id: 'gateBusy', step: 0, station: 2, read: false })).toBe('三号站的起降口忙不过来。可以在改装里升级。');
+  it('起降拥堵带站号：核心给的是编号，写成「{n}号站」的汉字', () => {
+    expect(tipText({ id: 'gateBusy', step: 0, station: 0, read: false })).toBe(fmt(STR.tips.gateBusy, { station: '一' }));
+    expect(tipText({ id: 'gateBusy', step: 0, station: 2, read: false })).toBe(fmt(STR.tips.gateBusy, { station: '三' }));
   });
 
   it('核心的七个便签编号都有文字，没有没填的参数', () => {
@@ -44,7 +45,7 @@ describe('便签的队列', () => {
     pushTip(state, 'firstOrder');
     pushTip(state, 'autoDispatchOn');
     pushTip(state, 'boardReady');
-    expect(currentTip(state)).toEqual({ id: 'firstOrder', text: '点一下这张单，派一架飞机去。', queued: 2 });
+    expect(currentTip(state)).toEqual({ id: 'firstOrder', text: STR.tips.firstOrder, queued: 2 });
   });
 
   it('点一张发 readTip：它标成已读，下一张才出来；全读完就没有了', () => {
@@ -102,16 +103,16 @@ describe('结局', () => {
     expect(endingText(campaignState())).toBeNull();
   });
 
-  it('到了结局：三个片区都到了四星，一共送了几单，用了几天', () => {
+  it('到了结局：三个片区均已达到四星，共送达几单，用时几天', () => {
     const state = campaignState();
     campaignOf(state).ending = { step: 12 * DAY_STEPS, days: 12, orders: 345 };
-    expect(endingText(state)).toBe('三个片区都到了四星。一共送了 345 单，用了 12 天。');
+    expect(endingText(state)).toBe(fmt(STR.system.ending, { orders: 345, days: 12 }));
   });
 });
 
 describe('结局分行', () => {
   it('每个句号收一行，不在一句话的中间折开', () => {
-    expect(endingLines('三个片区都到了四星。一共送了 345 单，用了 12 天。')).toEqual(['三个片区都到了四星。', '一共送了 345 单，用了 12 天。']);
+    expect(endingLines('三个片区均已达到四星。共送达 345 单，用时 12 天。')).toEqual(['三个片区均已达到四星。', '共送达 345 单，用时 12 天。']);
   });
 
   it('没有句号的文字是一行，空字符串没有行', () => {

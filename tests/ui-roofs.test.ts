@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
+import { STR, fmt } from '../src/content/strings.zh.ts';
 import { SPEED, createState, hashState, quoteCommand, refreshShops, stationPrice } from '../src/core/index.ts';
 import { STATION_SIZES } from '../src/render/city.ts';
 import { averageFlightSeconds, candidateRoofs, roofFlight, roofLines, secondsText } from '../src/ui/roofs.ts';
@@ -176,14 +177,13 @@ describe('候选屋顶的列表', () => {
     expect(STATION_SIZES.medium[1]).toBeLessThan(STATION_SIZES.large[1]);
   });
 
-  it('每块屋顶旁边两行字取自词表：大小、停机位上限、价格，飞到本片区的店和楼平均几秒', () => {
+  it('每块屋顶旁边两行字取自词表：大小、停机位上限、价格，至本片区店铺和楼宇平均几秒', () => {
     const state = campaignState();
     for (const c of candidateRoofs(state)) {
       const lines = roofLines(c);
       expect(lines).toHaveLength(2);
-      const sizeWord = { small: '小', medium: '中', large: '大' }[c.size];
-      expect(lines[0]).toBe(`${sizeWord}屋顶　最多 ${c.bayLimit} 个停机位　¥${c.price}`);
-      expect(lines[1]).toBe(`飞到本片区的店平均 ${c.flight.shops!.toFixed(1)} 秒，飞到本片区的楼平均 ${c.flight.buildings!.toFixed(1)} 秒`);
+      expect(lines[0]).toBe(fmt(STR.hud.roof.line, { size: STR.hud.roof.size[c.size], limit: c.bayLimit, price: c.price }));
+      expect(lines[1]).toBe(fmt(STR.hud.roof.distance, { shops: c.flight.shops!.toFixed(1), buildings: c.flight.buildings!.toFixed(1) }));
     }
   });
 

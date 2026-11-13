@@ -3,6 +3,7 @@
 // 五个数、各片区准时率、一张订单的四段时间、提前派出的订单数都沿用 metrics.ts 的 peakSummary 的口径。
 // 说明句由一个主句和最多一个附加句组成，各有一张按顺序判断的条件表。这里只返回句子的编号和要填的参数，
 // 编号就是词表 summary.main 和 summary.extra 的键，参数名与词表一致，中文由界面从词表取。
+// 各片区一行里还写这一场的目标线和有没有达到（目标线在高峰开始时算好，见 goals.ts），小结的对照由 shadow.ts 在生成之后补进记录。
 import { MAP_V1 } from '../../content/map_v1.ts';
 import { NOTES_V1 } from '../../content/notes_v1.ts';
 import { UNLOCKS_V1 } from '../../content/unlocks_v1.ts';
@@ -10,6 +11,7 @@ import { peakSummary } from '../metrics.ts';
 import { dayOf } from '../systems/schedule.ts';
 import type { PeakName } from '../systems/schedule.ts';
 import type { ExtraSentence, MainSentence, PeakDistrictRow, PeakRecord, PeakSegments, SimState } from '../types.ts';
+import { goalOf, judgeable, reachesLine } from './goals.ts';
 import { bayCap } from './prices.ts';
 import { pct } from './rating.ts';
 import { pushTip } from './tips.ts';
@@ -148,7 +150,7 @@ export function peakRecord(state: SimState, day: number, peak: PeakName): PeakRe
 
 /**
  * 在小结时刻生成一场高峰的记录，存进 campaign.peaks，并检查靠小结触发的三件事：
- * - 超时的订单（含还没送到的）超过来单的一定比例（内容表 UNLOCKS_V1.selectLateAbove）：「先送哪张单」一栏开放
+ * - 超时的订单（含还没送到的）超过来单的一定比例（内容表 UNLOCKS_V1.selectLateAbove）：「调度策略」一栏开放
  * - 主句是等飞机，并且有站的停机位已经到了屋顶的上限：双层货箱开放
  * - 有站平均有不少于 1 架飞机等降落：放出「起降口忙不过来」的便签，参数是这座站的编号
  * 要在高峰的小结时刻（状态推进到 summaryStep）调用，早了统计口径不对。
@@ -168,8 +170,14 @@ export function recordPeakSummary(state: SimState, day: number, peak: PeakName):
     const onTime = d === undefined ? 0 : d.nOnTime;
     const rate = pct(onTime, n);
     const before = previous?.districts.find((row) => row.district === k)?.pct ?? null;
-    districts.push({ district: k, n, onTime, pct: rate, delta: rate !== null && before !== null ? rate - before : null });
+    // 目标线是高峰开始时算好的。这一场送往这个片区的订单不够多时不判
+    const line = goalOf(campaign, day, peak, k)?.line ?? null;
+    const met = line !== null && judgeable(n) ? reachesLine(line, n, onTime) : null;
+    districts.push({ district: k, n, onTime, pct: rate, delta: rate !== null && before !== null ? rate - before : null, line, met });
   });
+  // 判过的片区全部达标，并且这一场没有退单，整张小结有一个标记
+  const judged = districts.filter((row) => row.met !== null);
+  const cleared = judged.length === 0 ? null : judged.every((row) => row.met === true) && s.nCancelled === 0;
 
   const live = state.stations.filter((st) => !st.removed);
   const input: SentenceInput = {
@@ -209,6 +217,8 @@ export function recordPeakSummary(state: SimState, day: number, peak: PeakName):
     changedMidPeak: s.early.changedMidPeak,
     main,
     extra,
+    cleared,
+    baseline: null,
   };
   campaign.peaks.push(record);
 

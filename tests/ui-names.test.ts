@@ -1,6 +1,7 @@
 // 楼名：老街的住宅「{n} 号院」，写字楼区「{字母}座」，大学城「{n} 号宿舍楼」，编号在各片区内从 1 或 A 开始。
 import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
+import { STR, fmt } from '../src/content/strings.zh.ts';
 import { buildCampaignWorld } from '../src/core/index.ts';
 import { MAP_BUILDING_NAMES, MAP_BUILDING_PLACES, buildingName, buildingNames, letterOf, orderHoverText, placeName } from '../src/ui/names.ts';
 
@@ -85,26 +86,29 @@ describe('一批楼的楼名', () => {
 });
 
 describe('订单悬停的文字', () => {
-  it('楼名带片区，菜名取自店，等的秒数向下取整：老街 11 号院，牛肉面，等了 12 秒', () => {
+  /** 订单悬停的文字，取自词表：楼名、菜名、已等待的秒数。 */
+  const hover = (building: string, dish: string, seconds: number): string => fmt(STR.hud.orderHover, { building, dish, seconds });
+
+  it('楼名带片区，菜名取自店，等的秒数向下取整：老街 11 号院，牛肉面，已等待 12 秒', () => {
     // 店 0 是老陈面馆（牛肉面），楼 10 是老街的第 11 栋
-    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 100 }, 100 + 125)).toBe('老街 11 号院，牛肉面，等了 12 秒');
-    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 100 }, 100 + 129.9)).toBe('老街 11 号院，牛肉面，等了 12 秒');
+    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 100 }, 100 + 125)).toBe(hover('老街 11 号院', '牛肉面', 12));
+    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 100 }, 100 + 129.9)).toBe(hover('老街 11 号院', '牛肉面', 12));
   });
 
-  it('刚下的单等了 0 秒，时间倒流也不会出负数', () => {
-    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 50 }, 50)).toContain('等了 0 秒');
-    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 50 }, 40)).toContain('等了 0 秒');
+  it('刚下的单已等待 0 秒，时间倒流也不会出负数', () => {
+    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 50 }, 50)).toBe(hover('老街 11 号院', '牛肉面', 0));
+    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 50 }, 40)).toBe(hover('老街 11 号院', '牛肉面', 0));
   });
 
   it('写字楼区和大学城的订单：楼名和菜名各取各的', () => {
     // 店 14 是二楼咖啡（冰美式），楼 20 是写字楼区的 A 座
-    expect(orderHoverText({ merchant: 14, building: 20, tOrder: 0 }, 30)).toBe('写字楼区 A 座，冰美式，等了 3 秒');
+    expect(orderHoverText({ merchant: 14, building: 20, tOrder: 0 }, 30)).toBe(hover('写字楼区 A 座', '冰美式', 3));
     // 店 20 是大学路烧烤（烤串十串），楼 30 是大学城的 1 号宿舍楼
-    expect(orderHoverText({ merchant: 20, building: 30, tOrder: 0 }, 250)).toBe('大学城 1 号宿舍楼，烤串十串，等了 25 秒');
+    expect(orderHoverText({ merchant: 20, building: 30, tOrder: 0 }, 250)).toBe(hover('大学城 1 号宿舍楼', '烤串十串', 25));
   });
 
   it('开局的第一张订单（店 0，楼 10）悬停的文字', () => {
-    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 0 }, 50)).toBe('老街 11 号院，牛肉面，等了 5 秒');
+    expect(orderHoverText({ merchant: 0, building: 10, tOrder: 0 }, 50)).toBe(hover('老街 11 号院', '牛肉面', 5));
   });
 
   it('指向不存在的店或楼时报错', () => {

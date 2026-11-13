@@ -123,7 +123,7 @@ async function verifyRoundTrips(plan: RoundTripPlan): Promise<RoundTripReport> {
 
 const OTHER: [string, ConfigOverrides][] = [
   ['老街开局', OPENING],
-  ['老街四架飞机，顺路的一起送，载量 2', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { pool: 'any' } }],
+  ['老街四架飞机，顺路合并，载量 2', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { pool: 'any' } }],
   ['三片区，三座站', { ...CITY, layout: 'three', capacity: 3 }],
   ['三片区，两座站向外移，载量 3', { ...CITY, layout: 'edge', peakRate: 82, capacity: 3 }],
   ['三片区，一座大站，起降间隔 0.4 秒', { ...CITY, layout: 'single', gateInterval: 0.4, capacity: 2 }],
@@ -148,7 +148,7 @@ describe('存档往返', () => {
     // 这 200 个时刻覆盖了各种局面：飞机的九种状态、订单的五种结局都出现过
     expect([...report.droneStates].sort()).toEqual(Object.values(DroneState).sort());
     expect([...report.orderStatuses].sort()).toEqual(Object.values(OrderStatus).sort());
-    // 中途换过规矩卡、点击过订单插队，状态里这些字段都有值：换卡记录、插队、同乘、提前派出、多个停靠点、起降口排队
+    // 中途换过策略卡、点击过订单插队，状态里这些字段都有值：换卡记录、插队、同乘、提前派出、多个停靠点、起降口排队
     expect(report.seen).toEqual({ manual: true, shared: true, early: true, multiStop: true, queued: true, ruleChanges: report.seen.ruleChanges });
     expect(report.seen.ruleChanges).toBeGreaterThanOrEqual(8);
   });

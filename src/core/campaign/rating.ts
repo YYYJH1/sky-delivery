@@ -13,7 +13,7 @@ import type { StarRuleV1 } from '../../content/table_types.ts';
  */
 export const MAX_ORDER_LIFE = DAY_STEPS;
 
-/** 一个片区在统计范围内有结果的订单。n 等于 onTime + late + cancelled。 */
+/** 一个片区在统计范围内完成的订单。n 等于 onTime + late + cancelled。 */
 export interface ResultCounts {
   n: number;
   onTime: number; // 承诺时间内送达
@@ -68,12 +68,12 @@ export function keepRule(star: number): StarRuleV1 | null {
   return star >= STARS_V1.dropFromStar ? starRule(star - 1) : null;
 }
 
-/** 准时率不小于要求，有结果的订单为 0 时不算达到。 */
+/** 准时率不小于要求，完成的订单为 0 时不算达到。 */
 export function meetsOnTime(rule: StarRuleV1, c: ResultCounts): boolean {
   return c.n > 0 && 100 * c.onTime >= rule.onTimeMin * c.n;
 }
 
-/** 退单率低于要求，没有退单率要求时恒为真，有结果的订单为 0 时不算达到。 */
+/** 退单率低于要求，没有退单率要求时恒为真，完成的订单为 0 时不算达到。 */
 export function meetsCancel(rule: StarRuleV1, c: ResultCounts): boolean {
   return c.n > 0 && (rule.cancelBelow === null || 100 * c.cancelled < rule.cancelBelow * c.n);
 }
@@ -95,8 +95,8 @@ export interface StarDecision {
 
 /**
  * 一个开通的片区在一次日结里的星级决定。
- * - 最近两天没有有结果的订单：星级不变，连续未达到的次数也不变。
- * - 有结果的订单少于下限（STARS_V1.minSample）：同样星级和连续未达到的次数都不变，记录里写 tooFewOrders，与没有订单区分开。
+ * - 最近两天没有完成的订单：星级不变，连续未达到的次数也不变。
+ * - 完成的订单少于下限（STARS_V1.minSample）：同样星级和连续未达到的次数都不变，记录里写 tooFewOrders，与没有订单区分开。
  *   刚开通的片区头一两天订单很少，一张准时的订单就是 100%，不设下限会直接升星。
  * - 达到上一档的条件：升一星，一次最多一星，最高五星，连续未达到的次数清零。
  * - 三星及以上没有升星：没有达到当前星级下面一档的条件，记一次，连续两次就掉一星并清零。达到了则清零。
@@ -124,7 +124,7 @@ export function decideStar(star: number, misses: number, noUpgrade: number, c: R
  * 片区纸条用的写法，对应词表 hud.districtNote 的几条：
  * firstDay（游戏的第一天，只看今天，目标二星）、toTwoStars（一星，目标二星）、toNextStar（二星到四星，目标高一星）、
  * maxStars（已经五星）、dropByOnTime 和 dropByCancel（处在「可能掉星」的状态，而且最近两天的统计现在还没有达到要保住的线）、
- * noData（还没有有结果的订单）、tooFew（有结果的订单少于下限，日结时星级不变）。
+ * noData（还没有完成的订单）、tooFew（完成的订单少于下限，日结时星级不变）。
  */
 export type NoteKind = 'firstDay' | 'toTwoStars' | 'toNextStar' | 'maxStars' | 'dropByOnTime' | 'dropByCancel' | 'noData' | 'tooFew';
 
@@ -142,14 +142,22 @@ export interface DistrictNote {
   next: StarRuleV1 | null; // 升到下一星的条件，已经五星为 null
   keep: StarRuleV1 | null; // 保住现在的星级要达到的条件，三星以下为 null
   atRisk: boolean; // 处在「可能掉星」的状态：三星及以上，上一次日结没有达到 keep，计数为 1
+  /** 最近两天的准时率比保住星级的线高几个百分点，负数是低。没有保星线（三星以下）或完成的订单不到下限时为 null */
+  margin: number | null;
+  /**
+   * 从现在起还要连续准时几单，最近两天的准时率才到下一星的线：(准时 + x) / (完成 + x) 不低于升星线，
+   * x = (升星线 × 完成的订单数 - 100 × 准时的订单数) / (100 - 升星线)，向上取整。
+   * 已经五星、已经达到、完成的订单不到下限时为 null
+   */
+  shortfall: number | null;
   kind: NoteKind;
 }
 
 /**
- * 片区纸条用哪一条，按下面的顺序取第一个满足的。c 是最近两天（第一天只有今天）有结果的订单，misses 是连续没有达到要保住的线的日结次数。
+ * 片区纸条用哪一条，按下面的顺序取第一个满足的。c 是最近两天（第一天只有今天）完成的订单，misses 是连续没有达到要保住的线的日结次数。
  * 1 处在「可能掉星」的状态（三星及以上，次数不小于 1），订单够数，而且现在的统计还没有达到要保住的线：写掉星的两条之一，准时率优先。
- * 2 还没有有结果的订单：noData。
- * 3 有结果的订单少于下限（STARS_V1.minSample）：tooFew。日结遇到这种情形星级不变，所以不写升星的条件。
+ * 2 还没有完成的订单：noData。
+ * 3 完成的订单少于下限（STARS_V1.minSample）：tooFew。日结遇到这种情形星级不变，所以不写升星的条件。
  * 4 其余按星级写：一星是 firstDay（游戏的第一天）或 toTwoStars，已经五星是 maxStars，其余是 toNextStar。
  * 第 1 条要求订单够数，因为订单不够时日结不判断掉星（decideStar），那时写「会掉一星」就不是实话。
  * 一般情况下次数为 1 是一次订单够数的日结留下的，两条不会冲突。
@@ -172,7 +180,7 @@ export function pickNoteKind(star: number, today: number, misses: number, c: Res
  * 某个片区现在的片区纸条数据。最近两天的统计只扫最近的订单，每次调用的开销与这三天的订单数成正比，
  * 界面每秒调用几次没有问题。已经五星时没有 next，三星以下没有 keep。
  * 处在「可能掉星」的状态时，如果最近两天的统计现在已经达到 keep，仍写升星的那条，因为明天日结不会再掉星。
- * 用哪一条见 pickNoteKind：还没有有结果的订单写 noData，不到下限写 tooFew，这两种情形下纸条不写准时率和升星的条件。
+ * 用哪一条见 pickNoteKind：还没有完成的订单写 noData，不到下限写 tooFew，这两种情形下纸条不写准时率和升星的条件。
  */
 export function districtNote(state: SimState, district: number): DistrictNote {
   const campaign = state.campaign;
@@ -186,6 +194,13 @@ export function districtNote(state: SimState, district: number): DistrictNote {
   const keep = keepRule(star);
   const misses = (campaign.rating[district] as { misses: number } | undefined)?.misses ?? 0;
   const atRisk = keep !== null && misses >= 1;
+  const counted = c.n > 0 && c.n >= STARS_V1.minSample;
+  const rate = pct(c.onTime, c.n);
+  const margin = keep !== null && counted && rate !== null ? rate - keep.onTimeMin : null;
+  // 准时率线乘订单数是百分点乘张数。每多一单准时，准时的一边加 100，线的一边加升星线，差距缩小 100 - 升星线
+  const gap = next === null ? 0 : next.onTimeMin * c.n - 100 * c.onTime;
+  const per = next === null ? 0 : 100 - next.onTimeMin;
+  const shortfall = counted && gap > 0 && per > 0 ? Math.floor((gap + per - 1) / per) : null;
   return {
     district,
     open: info.open,
@@ -199,6 +214,8 @@ export function districtNote(state: SimState, district: number): DistrictNote {
     next,
     keep,
     atRisk,
+    margin,
+    shortfall,
     kind: pickNoteKind(star, today, misses, c),
   };
 }

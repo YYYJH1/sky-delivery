@@ -8,7 +8,7 @@ import { buildRound, planRound, roundSequence } from './run.ts';
 export interface DispatchPreview {
   /**
    * 等待派单的订单编号，按派单的先后排。这一轮会派出的订单在前，按派出的顺序。
-   * 其余的订单按当前「先送哪张单」的排序，玩家点击插队的订单在最前。
+   * 其余的订单按当前「调度策略」的排序，玩家点击插队的订单在最前。
    * 只包含现在可以派的订单：经营模式开局阶段自动派单关着，没有被点击的订单不在里面。
    */
   ids: number[];

@@ -3,7 +3,7 @@ import { readFileSync, rmSync, rmdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { runDays, runMetrics } from '../src/core/index.ts';
+import { RULE_NAMES, runDays, runMetrics } from '../src/core/index.ts';
 import { average, displayWidth, formatTable, parseSeeds } from '../tools/headless-lib.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,7 +50,7 @@ describe('npm run headless', () => {
       const lines = r.stdout.split('\n');
       const rows = lines.filter((l) => /^(42|43|44|均值)\s/.test(l));
       expect(rows.length).toBe(4 * 3); // 主表、运行指标、高峰小结各四行
-      expect(r.stdout).toContain('快超时的先送(deadline)');
+      expect(r.stdout).toContain(`${RULE_NAMES.deadline}(deadline)`);
       expect(r.stdout).toContain('指标取第 2 天起的平均');
       expect(r.stdout).toContain('高峰小结');
 
@@ -81,7 +81,7 @@ describe('npm run headless', () => {
     }
   });
 
-  it('--pool 和 --capacity 指定一趟送几单的卡和载量，输出里有每单飞行距离、空飞和同乘', () => {
+  it('--pool 和 --capacity 指定合单策略的卡和载量，输出里有每单飞行距离、空飞和同乘', () => {
     const file = join(ROOT, 'out', `test-headless-pool-${process.pid}.json`);
     try {
       const r = headless([
@@ -90,8 +90,8 @@ describe('npm run headless', () => {
       ]);
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain('顺路的一起送(any)');
-      expect(r.stdout).toContain('等 10 秒再帮(hybrid)');
+      expect(r.stdout).toContain(`${RULE_NAMES.any}(any)`);
+      expect(r.stdout).toContain(`${RULE_NAMES.hybrid}(hybrid)`);
       expect(r.stdout).toContain('载量 2');
       expect(r.stdout).toContain('每单飞行距离');
       expect(r.stdout).toContain('空飞%');

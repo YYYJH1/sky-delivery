@@ -29,6 +29,15 @@ export function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+/** 两种颜色按比例混合，t 为 0 是 a，为 1 是 b。返回 0xRRGGBB 的整数，给 Pixi 的底色用。 */
+export function mixColor(a: string, b: string, t: number): number {
+  const [ar, ag, ab] = hexToRgb(a);
+  const [br, bg, bb] = hexToRgb(b);
+  const k = Math.max(0, Math.min(1, t));
+  const channel = (from: number, to: number): number => Math.round(from + (to - from) * k);
+  return (channel(ar, br) << 16) | (channel(ag, bg) << 8) | channel(ab, bb);
+}
+
 function trimNumber(v: number): string {
   return String(Math.round(v * 1000) / 1000);
 }

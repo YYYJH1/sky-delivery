@@ -40,7 +40,7 @@ export const AMOUNT_BASE = 5; // 订单金额：5 元起，另按距离计
 export const AMOUNT_PER_DISTANCE = 0.004;
 
 // ---- 派单规则 ----
-export const ZONE_WAIT_STEPS = 100; // 「等 10 秒再帮」：订单下单后只有最近的站能接，满 10 秒其他站也能接
+export const ZONE_WAIT_STEPS = 100; // 「延迟支援」：订单下单后只有最近的站能接，满 10 秒其他站也能接
 export const PUSH_STEPS = 60; // 「一起送」：已有订单的预计送达最多被推迟 6 秒
 
 // ---- 结算 ----

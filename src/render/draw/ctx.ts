@@ -15,8 +15,13 @@ export function makeCanvas(width: number, height: number): HTMLCanvasElement {
   return canvas;
 }
 
-export function context2d(canvas: HTMLCanvasElement): Ctx {
-  const ctx = canvas.getContext('2d');
+/**
+ * 画布的二维上下文。inMemory 为真时这块画布在内存里画，不放进显卡（浏览器的 willReadFrequently）。
+ * 画完要读回像素的画布（getImageData），和画完一次性上传成纹理的画布都适合：浏览器不用在显卡和内存之间倒腾，
+ * 读的时候也不用等显卡把排着的活干完。要在第一次取上下文时给。
+ */
+export function context2d(canvas: HTMLCanvasElement, inMemory = false): Ctx {
+  const ctx = canvas.getContext('2d', inMemory ? { willReadFrequently: true } : undefined);
   if (ctx === null) throw new Error('canvas 2d context is not available');
   return ctx;
 }

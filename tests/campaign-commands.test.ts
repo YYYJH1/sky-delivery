@@ -1,5 +1,6 @@
 // 经营模式的命令：每个命令的每个条件，成功和失败各有测试，失败时状态不变。
 import { describe, expect, it } from 'vitest';
+import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import {
   DAY_STEPS,
@@ -24,6 +25,13 @@ import {
 } from '../src/core/index.ts';
 import type { SimState, StepObserver } from '../src/core/index.ts';
 import { campaignOf, expectRejected, must, quietState, roofWhere, withMoney } from './campaign-helpers.ts';
+
+/** 一座站的第 n 架飞机的价格：第 1、2 架是基础价，第 n 架（n 不小于 3）是 round(基础价 × 增长率^(n-3))。 */
+const droneAt = (n: number): number => Math.round(ECONOMY_V1.droneBase * ECONOMY_V1.droneGrowth ** Math.max(0, n - 3));
+/** 一座站的第 n 个停机位的价格，n 不小于 3：round(基础价 × 增长率^(n-3))。 */
+const bayAt = (n: number): number => Math.round(ECONOMY_V1.bayBase * ECONOMY_V1.bayGrowth ** (n - 3));
+const FIRST_DRONE = ECONOMY_V1.droneBase;
+const FIRST_BAY = ECONOMY_V1.bayBase;
 
 const OFFICE_ROOF = roofWhere((r) => r.district === 1);
 const CAMPUS_ROOF = roofWhere((r) => r.district === 2);
@@ -50,40 +58,49 @@ function takeoffRecorder(starts: number[]): StepObserver {
 }
 
 describe('价格', () => {
-  // 飞机和停机位的基础价校准过，是初值的两倍，增长率不变，见 economy_v1.ts 开头的说明
-  it('飞机：一座站的第 1、2 架各 100，第 n 架（n 不小于 3）是 round(100 × 1.14^(n-3))', () => {
-    expect([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(dronePrice)).toEqual([100, 100, 100, 114, 130, 148, 169, 193, 219, 250, 285, 325]);
-    expect([3, 4, 6, 9, 12].map(dronePrice)).toEqual([100, 114, 148, 219, 325]);
+  it('飞机：一座站的第 1、2 架是基础价，第 n 架（n 不小于 3）是 round(基础价 × 增长率^(n-3))', () => {
+    const all = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    expect(all.map(dronePrice)).toEqual(all.map(droneAt));
+    expect([1, 2, 3].map(dronePrice)).toEqual([FIRST_DRONE, FIRST_DRONE, FIRST_DRONE]);
+    // 增长率大于 1：越往后越贵
+    for (let n = 4; n <= 12; n++) expect(dronePrice(n)).toBeGreaterThan(dronePrice(n - 1));
   });
 
-  it('停机位：新站自带 2 个，第 n 个（n 不小于 3）是 round(140 × 1.17^(n-3))', () => {
-    expect([3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(bayPrice)).toEqual([140, 164, 192, 224, 262, 307, 359, 420, 492, 575]);
-    expect([3, 4, 6, 9, 12].map(bayPrice)).toEqual([140, 164, 224, 359, 575]);
+  it('停机位：新站自带 2 个，第 n 个（n 不小于 3）是 round(基础价 × 增长率^(n-3))', () => {
+    const all = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    expect(all.map(bayPrice)).toEqual(all.map(bayAt));
+    expect(bayPrice(3)).toBe(FIRST_BAY);
+    for (let n = 4; n <= 12; n++) expect(bayPrice(n)).toBeGreaterThan(bayPrice(n - 1));
   });
 
-  it('一座站从 2 个停机位、2 架飞机扩到 12 个、12 架：停机位共 3,135，飞机共 1,933，合计 5,068', () => {
+  it('一座站从 2 个停机位、2 架飞机扩到 12 个、12 架：停机位和飞机各自的合计，合计是价格表里算出来的数', () => {
     const range = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     const bays = range.reduce((sum, n) => sum + bayPrice(n), 0);
     const drones = range.reduce((sum, n) => sum + dronePrice(n), 0);
-    expect([bays, drones, bays + drones]).toEqual([3135, 1933, 5068]);
+    expect([bays, drones]).toEqual([range.reduce((sum, n) => sum + bayAt(n), 0), range.reduce((sum, n) => sum + droneAt(n), 0)]);
+    // 价格表 v1 的数：停机位共 6,646，飞机共 3,197，合计 9,843
+    expect([bays, drones, bays + drones]).toEqual([6646, 3197, 9843]);
   });
 
   it('每一档都从基础价直接算出后取整，不在上一档取整后的价格上累乘', () => {
-    expect(dronePrice(9)).toBe(Math.round(100 * 1.14 ** 6));
-    expect(dronePrice(12)).toBe(Math.round(100 * 1.14 ** 9));
-    expect(bayPrice(12)).toBe(Math.round(140 * 1.17 ** 9));
+    expect(dronePrice(9)).toBe(Math.round(ECONOMY_V1.droneBase * ECONOMY_V1.droneGrowth ** 6));
+    expect(dronePrice(12)).toBe(Math.round(ECONOMY_V1.droneBase * ECONOMY_V1.droneGrowth ** 9));
+    expect(bayPrice(12)).toBe(Math.round(ECONOMY_V1.bayBase * ECONOMY_V1.bayGrowth ** 9));
     // 在取整后的价格上累乘会得到另一个数
-    let chained = 100;
-    for (let n = 4; n <= 12; n++) chained = Math.round(chained * 1.14);
+    let chained = ECONOMY_V1.droneBase;
+    for (let n = 4; n <= 12; n++) chained = Math.round(chained * ECONOMY_V1.droneGrowth);
     expect(chained).not.toBe(dronePrice(12));
   });
 
-  it('建站价 = round(基准价 × 屋顶的价格系数)，基准价第 2 座 330，第 3 座 1,400，第 4 座 2,800', () => {
+  it('建站价 = round(基准价 × 屋顶的价格系数)，第 2、3、4 座站各有各的基准价，一座比一座贵', () => {
+    const [second, third, fourth] = ECONOMY_V1.stationBase as [number, number, number];
+    expect(second).toBeLessThan(third);
+    expect(third).toBeLessThan(fourth);
     for (let roof = 0; roof < MAP_V1.roofs.length; roof++) {
       const coef = (MAP_V1.roofs[roof] as { priceCoef: number }).priceCoef;
-      expect(stationPrice(1, roof)).toBe(Math.round(330 * coef));
-      expect(stationPrice(2, roof)).toBe(Math.round(1400 * coef));
-      expect(stationPrice(3, roof)).toBe(Math.round(2800 * coef));
+      expect(stationPrice(1, roof)).toBe(Math.round(second * coef));
+      expect(stationPrice(2, roof)).toBe(Math.round(third * coef));
+      expect(stationPrice(3, roof)).toBe(Math.round(fourth * coef));
     }
   });
 });
@@ -138,10 +155,10 @@ describe('命令：建站', () => {
     expect(stationCount(state)).toBe(2);
   });
 
-  it('第 2、3、4 座站的价格是基准价 330、1,400、2,800 乘各自屋顶的价格系数', () => {
+  it('第 2、3、4 座站的价格是价格表里的基准价乘各自屋顶的价格系数', () => {
     const state = withMoney(quietState());
     openAll(state);
-    const bases = [330, 1400, 2800];
+    const bases = ECONOMY_V1.stationBase;
     [OFFICE_ROOF, CAMPUS_ROOF, OLD_SMALL].forEach((roof, i) => {
       const coef = (MAP_V1.roofs[roof] as { priceCoef: number }).priceCoef;
       const quote = quoteCommand(state, { type: 'buildStation', roof });
@@ -191,7 +208,7 @@ describe('命令：建站', () => {
   });
 });
 
-describe('命令：添飞机', () => {
+describe('命令：购买无人机', () => {
   it('成功：新飞机满电，停在这座站的停机位上，归属这座站，占用数加一', () => {
     const state = withMoney(quietState());
     must(state, { type: 'buyBay', station: 0 });
@@ -220,7 +237,7 @@ describe('命令：添飞机', () => {
       removed: false,
     });
     expect(station.occupied).toBe(3);
-    expect(campaignOf(state).drones[2]).toEqual({ day: 0, paid: 100 });
+    expect(campaignOf(state).drones[2]).toEqual({ day: 0, paid: FIRST_DRONE });
   });
 
   it('这座站的飞机数不能超过停机位数：fleetFull，加一个停机位之后可以买', () => {
@@ -231,24 +248,25 @@ describe('命令：添飞机', () => {
     expectRejected(state, { type: 'buyDrone', station: 0 }, 'fleetFull');
   });
 
-  it('飞机的价格按这座站已有的飞机数算：新站的头两架各 100，老站的第 3 架 100，第 4 架 114', () => {
+  it('飞机的价格按这座站已有的飞机数算：新站的头两架各是基础价，老站的第 3 架是基础价，第 4 架按增长率涨价', () => {
     const state = withMoney(quietState());
     openAll(state);
     const second = must(state, { type: 'buildStation', roof: OFFICE_ROOF });
     const price = (station: number): number => quoteCommand(state, { type: 'buyDrone', station }).price;
-    expect(price(second)).toBe(100);
+    expect(price(second)).toBe(FIRST_DRONE);
     must(state, { type: 'buyDrone', station: second });
-    expect(price(second)).toBe(100);
+    expect(price(second)).toBe(FIRST_DRONE);
     must(state, { type: 'buyDrone', station: second });
     expect(quoteCommand(state, { type: 'buyDrone', station: second }).reason).toBe('fleetFull');
     must(state, { type: 'buyBay', station: 0 });
-    expect(price(0)).toBe(100);
+    expect(price(0)).toBe(droneAt(3));
     must(state, { type: 'buyDrone', station: 0 });
     must(state, { type: 'buyBay', station: 0 });
-    expect(price(0)).toBe(114);
+    expect(price(0)).toBe(droneAt(4));
+    expect(droneAt(4)).toBeGreaterThan(FIRST_DRONE);
   });
 
-  it('一座站从 2 架扩到 12 架（大屋顶）：飞机实付 1,933，停机位实付 3,135', () => {
+  it('一座站从 2 架扩到 12 架（大屋顶）：飞机和停机位实付的钱就是价格表里各档的合计', () => {
     const state = withMoney(quietState());
     openAll(state);
     const id = must(state, { type: 'buildStation', roof: OLD_LARGE });
@@ -264,7 +282,8 @@ describe('命令：添飞机', () => {
       must(state, { type: 'buyDrone', station: id });
       drones += m2 - campaignOf(state).money;
     }
-    expect([bays, drones]).toEqual([3135, 1933]);
+    const range = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    expect([bays, drones]).toEqual([range.reduce((sum, n) => sum + bayAt(n), 0), range.reduce((sum, n) => sum + droneAt(n), 0)]);
     expect(fleetOf(state, id)).toBe(12);
     expect((state.stations[id] as { bays: number }).bays).toBe(12);
   });
@@ -284,11 +303,11 @@ describe('命令：添飞机', () => {
   });
 
   it('余额不够：notEnoughMoney，刚好够就行', () => {
-    const state = withMoney(quietState(), 140);
+    const state = withMoney(quietState(), FIRST_BAY);
     must(state, { type: 'buyBay', station: 0 });
-    campaignOf(state).money = 99.99;
+    campaignOf(state).money = droneAt(3) - 0.01;
     expectRejected(state, { type: 'buyDrone', station: 0 }, 'notEnoughMoney');
-    campaignOf(state).money = 100;
+    campaignOf(state).money = droneAt(3);
     must(state, { type: 'buyDrone', station: 0 });
     expect(campaignOf(state).money).toBe(0);
   });
@@ -299,8 +318,8 @@ describe('命令：添飞机', () => {
   });
 });
 
-describe('命令：加停机位', () => {
-  it('价格按这座站已有的停机位数算：第 3 个 140，第 4 个 164，第 6 个 224，第 9 个 359', () => {
+describe('命令：新增停机位', () => {
+  it('价格按这座站已有的停机位数算：第 3 个是基础价，之后每个按增长率涨价', () => {
     const state = withMoney(quietState());
     const paid: number[] = [];
     for (let n = 3; n <= 9; n++) {
@@ -310,7 +329,8 @@ describe('命令：加停机位', () => {
       paid.push(before - campaignOf(state).money);
       expect(quote.price).toBe(paid[paid.length - 1]);
     }
-    expect(paid).toEqual([140, 164, 192, 224, 262, 307, 359]);
+    expect(paid).toEqual([3, 4, 5, 6, 7, 8, 9].map(bayAt));
+    expect(paid[0]).toBe(FIRST_BAY);
     expect((state.stations[0] as { bays: number }).bays).toBe(9);
   });
 
@@ -332,9 +352,9 @@ describe('命令：加停机位', () => {
 
   it('余额不够：notEnoughMoney，刚好够就行，站不存在：unknownTarget', () => {
     const state = quietState();
-    campaignOf(state).money = 139.99;
+    campaignOf(state).money = FIRST_BAY - 0.01;
     expectRejected(state, { type: 'buyBay', station: 0 }, 'notEnoughMoney');
-    campaignOf(state).money = 140;
+    campaignOf(state).money = FIRST_BAY;
     must(state, { type: 'buyBay', station: 0 });
     expect(campaignOf(state).money).toBe(0);
     for (const station of [-1, 1, 0.5]) expectRejected(withMoney(quietState()), { type: 'buyBay', station }, 'unknownTarget');
@@ -436,7 +456,7 @@ describe('命令：双层货箱', () => {
     expect(b.units).toBe(2);
   });
 
-  it('买了双层货箱之后，一起送的规矩生效：同样的订单，不买时没有同乘，买了之后有', () => {
+  it('买了双层货箱之后，一起送的策略生效：同样的订单，不买时没有同乘，买了之后有', () => {
     const run = (buy: boolean): { shared: number; mostLoad: number } => {
       const state = withMoney(quietState({ orderEndStep: null, seed: 42 }), 1000);
       campaignOf(state).opening.orders = [0, 1, 2, 3, 4]; // 跳过开局的五张固定订单，直接进入随机订单
@@ -508,8 +528,8 @@ describe('命令：就近降落', () => {
     const moved = nearest.drones.find((d) => d.home === 1) as { station: number };
     expect(moved.station).toBe(1);
     expect([fleetOf(nearest, 0), fleetOf(nearest, 1)]).toEqual([1, 1]);
-    // 站 0 的飞机数少了一架：站 0 买飞机要按 1 架算，需要先有空的停机位才行，价格还是 100，站 1 现在有 1 架飞机
-    expect(quoteCommand(nearest, { type: 'buyDrone', station: 1 }).price).toBe(100);
+    // 站 0 的飞机数少了一架：站 0 买飞机要按 1 架算，需要先有空的停机位才行，价格还是基础价，站 1 现在有 1 架飞机
+    expect(quoteCommand(nearest, { type: 'buyDrone', station: 1 }).price).toBe(FIRST_DRONE);
   });
 
   it('最近的站停机位满了（占用数加预约数不小于停机位数）就找下一座，都满了回归属站', () => {
@@ -524,20 +544,21 @@ describe('命令：就近降落', () => {
 });
 
 describe('命令：开通片区', () => {
-  it('上一个片区达到三星、余额够：写字楼区 200，大学城 1,600，开通后星级不变，这个片区的楼和开局开张的店开始使用', () => {
+  it('上一个片区达到三星、余额够：开通价取价格表，开通后星级不变，这个片区的楼和开局开张的店开始使用', () => {
     const state = withMoney(quietState());
     const campaign = campaignOf(state);
     expect(campaign.districts.map((d) => [d.open, d.star])).toEqual([[true, 1], [false, 1], [false, 1]]);
     expect(campaign.shopOpen.filter(Boolean).length).toBe(9); // 老街开局开 9 家
     expectRejected(state, { type: 'openDistrict', district: 1 }, 'needStars');
-    expect(quoteCommand(state, { type: 'openDistrict', district: 1 })).toEqual({ ok: false, reason: 'needStars', kind: 'buy', price: 200 });
+    const officePrice = ECONOMY_V1.districtOpenPrice[1] as number;
+    expect(quoteCommand(state, { type: 'openDistrict', district: 1 })).toEqual({ ok: false, reason: 'needStars', kind: 'buy', price: officePrice });
     (campaign.districts[0] as { star: number }).star = 2;
     expectRejected(state, { type: 'openDistrict', district: 1 }, 'needStars');
     (campaign.districts[0] as { star: number }).star = 3;
-    expect(quoteCommand(state, { type: 'openDistrict', district: 1 })).toEqual({ ok: true, reason: null, kind: 'buy', price: 200 });
+    expect(quoteCommand(state, { type: 'openDistrict', district: 1 })).toEqual({ ok: true, reason: null, kind: 'buy', price: officePrice });
     const before = campaign.money;
     expect(must(state, { type: 'openDistrict', district: 1 })).toBe(1);
-    expect(before - campaign.money).toBe(200);
+    expect(before - campaign.money).toBe(officePrice);
     expect(campaign.districts[1]).toEqual({ open: true, star: 1 });
     // 老街此时三星，二、三星开张的 3 家店也已开张（9 + 3 = 12），写字楼区一星开局开 3 家
     expect(campaign.shopOpen.filter(Boolean).length).toBe(12 + 3);
@@ -552,7 +573,7 @@ describe('命令：开通片区', () => {
     expectRejected(state, { type: 'openDistrict', district: 0 }, 'alreadyOpen');
   });
 
-  it('大学城要写字楼区开通并达到三星，价格 1,600', () => {
+  it('大学城要写字楼区开通并达到三星，价格取价格表', () => {
     const state = withMoney(quietState());
     const campaign = campaignOf(state);
     (campaign.districts[0] as { star: number }).star = 3;
@@ -564,7 +585,7 @@ describe('命令：开通片区', () => {
     (campaign.districts[1] as { star: number }).star = 3;
     const before = campaign.money;
     must(state, { type: 'openDistrict', district: 2 });
-    expect(before - campaign.money).toBe(1600);
+    expect(before - campaign.money).toBe(ECONOMY_V1.districtOpenPrice[2]);
     expect(campaign.districts[2]).toEqual({ open: true, star: 1 });
     // 老街三星 12 家，写字楼区三星 3 + 2 = 5 家，大学城一星开局开 4 家
     expect(campaign.shopOpen.filter(Boolean).length).toBe(12 + 5 + 4);
@@ -591,8 +612,8 @@ describe('命令：开通片区', () => {
   });
 });
 
-describe('命令：换规矩卡和点击订单插队', () => {
-  it('换规矩卡：沿用 setRules，立即生效并记下换卡的时刻，不收费', () => {
+describe('命令：换策略卡和点击订单插队', () => {
+  it('换策略卡：沿用 setRules，立即生效并记下换卡的时刻，不收费', () => {
     const state = quietState();
     advance(state, 7);
     expect(quoteCommand(state, { type: 'setRules', rules: { select: 'deadline' } })).toEqual({ ok: true, reason: null, kind: 'free', price: 0 });
@@ -604,7 +625,7 @@ describe('命令：换规矩卡和点击订单插队', () => {
     ]);
   });
 
-  it('规矩卡不存在或栏不存在：unknownRule，一张也不换', () => {
+  it('策略卡不存在或栏不存在：unknownRule，一张也不换', () => {
     const state = quietState();
     expectRejected(state, { type: 'setRules', rules: { select: 'nope' } }, 'unknownRule');
     expectRejected(state, { type: 'setRules', rules: { select: 'deadline', zone: 'nope' } }, 'unknownRule');
@@ -635,7 +656,7 @@ describe('命令：价格只读', () => {
     const state = quietState();
     const before = hashState(state);
     expect(quoteCommand(state, { type: 'upgradeGate', station: 0 })).toEqual({ ok: false, reason: 'notEnoughMoney', kind: 'buy', price: 240 });
-    expect(quoteCommand(state, { type: 'buyBay', station: 0 })).toEqual({ ok: false, reason: 'notEnoughMoney', kind: 'buy', price: 140 });
+    expect(quoteCommand(state, { type: 'buyBay', station: 0 })).toEqual({ ok: false, reason: 'notEnoughMoney', kind: 'buy', price: FIRST_BAY });
     expect(quoteCommand(state, { type: 'buyDoubleBox' }).price).toBe(180);
     expect(quoteCommand(state, { type: 'buyNearestLanding' })).toEqual({ ok: false, reason: 'needTwoStations', kind: 'buy', price: 300 });
     expect(hashState(state)).toBe(before);
@@ -643,7 +664,7 @@ describe('命令：价格只读', () => {
 
   it('同一步里先后执行的命令按先后顺序生效', () => {
     const state = quietState();
-    campaignOf(state).money = 140;
+    campaignOf(state).money = FIRST_BAY;
     must(state, { type: 'buyBay', station: 0 });
     expectRejected(state, { type: 'buyBay', station: 0 }, 'notEnoughMoney');
     campaignOf(state).money = 1000;

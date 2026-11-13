@@ -192,7 +192,7 @@ describe('经营模式的存档往返', () => {
   it('从中局开始运行两个游戏日，随机选 200 个时刻存档再读档，之后 600 步的状态哈希与不存档时逐步相同', { timeout: 300_000 }, async () => {
     const total = 2 * DAY_STEPS;
     const report = await verify({
-      start: () => richCampaign(7, 8000),
+      start: () => richCampaign(7, 16000),
       total,
       moments: 200,
       horizon: 600,
@@ -211,7 +211,7 @@ describe('经营模式的存档往返', () => {
     expect([...report.droneStates].sort()).toEqual(Object.values(DroneState).sort());
     expect([...report.orderStatuses].sort()).toEqual([OrderStatus.Pending, OrderStatus.Assigned, OrderStatus.Picked, OrderStatus.Delivered].sort());
     expect(Object.values(report.stores).every((n) => n > 20)).toBe(true);
-    // 状态里有经营模式的各种东西：多座站、很多飞机、退回过的飞机、两套规矩、双层货箱、就近降落、日结和小结的记录、离开结算的记录
+    // 状态里有经营模式的各种东西：多座站、很多飞机、退回过的飞机、两套策略、双层货箱、就近降落、日结和小结的记录、离开结算的记录
     expect(report.seen.stations).toBeGreaterThanOrEqual(3);
     expect(report.seen.drones).toBeGreaterThanOrEqual(20);
     expect(report.seen).toMatchObject({

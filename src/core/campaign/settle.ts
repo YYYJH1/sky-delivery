@@ -1,10 +1,10 @@
 // 日结：每个游戏日结束时算一次。第 d 天的日结在第 (d + 1) × 3600 步开始时、产生订单之前做，
 // 所以新一天的订单量用的是新的星级，升星后新开张的店也从新的一天起能抽到。
 // 日结做的事：
-// 1 统计今天下单、今天有结果、还没有结果的订单数，今天的进账
+// 1 统计今天下单、今天有结果、还没完成的订单数，今天的进账
 // 2 口碑：每个开通的片区按最近两天的统计升星或掉星，星级变了就重算开张的店
 // 3 记录，包括每个片区的一行
-// 4 靠日结判断的开放项：「先送哪张单」一栏最晚在第二天的日结时开放，片区的显示，「来回快的先送」，「某一片的先送」，价签
+// 4 靠日结判断的开放项：「调度策略」一栏最晚在第二天的日结时开放，片区的显示，「短程优先」，「{片区}优先」，价签
 // 5 结局：三个片区都到了四星
 import { MAP_V1 } from '../../content/map_v1.ts';
 import { STARS_V1 } from '../../content/stars_v1.ts';
@@ -90,7 +90,17 @@ export function settleDay(state: SimState, day: number): DayRecord {
     }
   }
 
-  const record: DayRecord = { day, step: state.step, ...counts, income: campaign.income[day] ?? 0, districts: lines };
+  // 今天的高峰里判过目标的场数，和其中全部达标的场数
+  const peaksOfDay = campaign.peaks.filter((p) => p.day === day);
+  const record: DayRecord = {
+    day,
+    step: state.step,
+    ...counts,
+    income: campaign.income[day] ?? 0,
+    districts: lines,
+    peaksJudged: peaksOfDay.filter((p) => p.cleared !== null).length,
+    peaksCleared: peaksOfDay.filter((p) => p.cleared === true).length,
+  };
   campaign.days.push(record);
 
   // 靠日结判断的开放项。便签随开放项一起放出，顺序是：调度台、价签、写字楼区
@@ -112,8 +122,8 @@ export function settleDay(state: SimState, day: number): DayRecord {
 }
 
 /**
- * 「某一片的先送」的条件：写字楼区连续两次日结没有升星，并且它最近两天的准时率比其他开通片区合在一起的最近两天准时率低 20 个百分点以上。
- * 「以上」按不小于算。写字楼区或其他片区最近两天没有有结果的订单时，没法比，不算。
+ * 「{片区}优先」的条件：写字楼区连续两次日结没有升星，并且它最近两天的准时率比其他开通片区合在一起的最近两天准时率低 20 个百分点以上。
+ * 「以上」按不小于算。写字楼区或其他片区最近两天没有完成的订单时，没法比，不算。
  */
 function prioDistrictOpens(state: SimState, byDistrict: readonly ResultCounts[]): boolean {
   const campaign = state.campaign;

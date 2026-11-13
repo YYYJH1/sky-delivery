@@ -3,8 +3,9 @@
 // 点击便签发 readTip 命令，核心标成已读，下一张才出现。
 // 纯函数，不碰 DOM 和状态。
 import { STR, fmt, stationNumeral } from '../content/strings.zh.ts';
-import { unreadTips } from '../core/index.ts';
+import { gainTotal, unreadTips } from '../core/index.ts';
 import type { SimState, TipId, TipRecord } from '../core/index.ts';
+import { gainTotalLine } from './tickets.ts';
 
 export interface TipView {
   readonly id: TipId;
@@ -45,8 +46,12 @@ export function endingLines(text: string): string[] {
   return text.split(/(?<=\u3002)/u).filter((line) => line !== '');
 }
 
-/** 结局的文字，还没到结局时为 null。 */
+/** 结局的文字，还没到结局时为 null。对照过的话，后面接一句累计比开局策略多准时或少准时几单。 */
 export function endingText(state: SimState): string | null {
-  const ending = state.campaign?.ending ?? null;
-  return ending === null ? null : fmt(STR.system.ending, { orders: ending.orders, days: ending.days });
+  const campaign = state.campaign;
+  const ending = campaign?.ending ?? null;
+  if (campaign === null || ending === null) return null;
+  const gain = gainTotal(campaign.peaks);
+  const line = gainTotalLine(gain.total, gain.peaks);
+  return fmt(STR.system.ending, { orders: ending.orders, days: ending.days }) + (line ?? '');
 }

@@ -3,10 +3,13 @@
 // 分两层：
 // - 静态层：片区底色、街道和街区、屋顶和屋顶物件、树、河、桥、片区名。载入时用 Canvas 2D 画一次，烘焙成纹理（bake.ts、static-layers.ts），
 //   每种状态一套。整张地图放进窗口时分片区烘焙，片区的显示状态只换透明度。窗口大小变了、烘焙倍率跟着变时才重新烘焙，平时每帧不烘焙。
+//   昼夜渐变时两种状态的静态层叠在一起按比例混合，下一种状态在要用之前就一层一层提前烘焙好，烘焙好的纹理留着复用（setBlend、warmAhead）。
 // - 动态层：每帧更新的精灵和对象池：站点和停机位，选中的站，候选屋顶，店的门面和票杆上的小票，飞机和影子，航线（一个网格一次绘制），
-//   送餐目的地，送达和退单的记号，等降落的圈和架数，雨。
+//   送餐目的地，送达和退单的记号，等降落的圈和架数，雨。动态层的画法（色板）不渐变：渐变过半时从一种状态换到另一种，
+//   两种色板混合出来的墨色和纸色会撞在一起，字和飞机的轮廓就看不清了。
 // 画板是屏幕朝向的：世界坐标先转一个固定的角度再摆放（geometry.ts），所以排线永远是 45°。镜头（camera.ts）把画板缩放平移到窗口里，
-// 缩放只作用在整个画板上，不影响烘焙。整张地图放进窗口时缩放比很小，会动的东西和字按 camera.ts 的 markerUnits 放大一些，才看得清。
+// 缩放只作用在整个画板上，不影响烘焙。镜头缩放比 1 小时，会动的东西和字按 camera.ts 的 markerUnits 放大一些，才看得清。镜头在片区第一次显示时拉远，
+// 拉远的过程中静态层的纹理按旧倍率随镜头缩放，挪完才按新倍率重新烘焙（setCamera、prepareMove、refreshStatic）。
 import { Application, Container, Sprite, Text, Texture, TilingSprite } from 'pixi.js';
 import type { BLEND_MODES } from 'pixi.js';
 import { STATION_COLOR_NAMES } from '../content/palette.ts';
@@ -17,12 +20,17 @@ import { grainTile } from './bake.ts';
 import { bakeScaleFor, boardToScreen, markerUnits, screenToBoard, visibleBoardRect } from './camera.ts';
 import type { Camera, MarkerUnits } from './camera.ts';
 import type { City, ShopFront, StationRoof } from './city-types.ts';
+import { assignDistricts } from './districts.ts';
 import type { DistrictMode } from './districts.ts';
-import { clipOutside, headingOf, inflate, lerp, moveClear, overlapArea } from './geometry.ts';
+import { dominantLook } from './daynight.ts';
+import type { LookBlend } from './daynight.ts';
+import { clipOutside, headingOf, inflate, lerp, moveClear, overlapArea, unionRect } from './geometry.ts';
 import type { Board, Rect, Vec } from './geometry.ts';
 import { slotSize } from './layout.ts';
-import { hexToInt, stationColor, themeFor } from './look.ts';
+import { LOOK_NAMES, hexToInt, mixColor, palFor, stationColor, themeFor } from './look.ts';
 import type { Look, Theme } from './look.ts';
+import { districtFootprints, placeNames } from './names.ts';
+import type { NameSite, NameWorld } from './names.ts';
 import { QuadBatch } from './quads.ts';
 import { createRand, mixSeed } from './rng.ts';
 import {
@@ -32,7 +40,9 @@ import {
   activeMarks,
   destinations,
   firstOrderSince,
+  frontDepth,
   frontPoint,
+  frontZone,
   holdEase,
   holdingSlots,
   nearestStationOf,
@@ -46,7 +56,7 @@ import {
   waitingTickets,
 } from './scene.ts';
 import type { TicketPoint } from './scene.ts';
-import { StaticLayers } from './static-layers.ts';
+import { MIN_MIX, StaticLayers } from './static-layers.ts';
 import type { StaticLayout } from './static-layers.ts';
 import { Atlas, DynamicTextures, SPIN_FRAMES, TEXTURE_RESOLUTION } from './textures.ts';
 import type { FontNames } from './textures.ts';
@@ -118,6 +128,8 @@ export interface MapRendererOptions {
   readonly roofOfStation: (state: SimState, station: number) => number | null;
   /** 店有没有开张。 */
   readonly shopOpen: (state: SimState, shop: number) => boolean;
+  /** 站所在的屋顶最多放几个停机位。停机位按它排好位置，买新的停机位时已停的飞机不动。没有时（沙盒模式）按现有的个数排。 */
+  readonly bayLimit?: (state: SimState, station: number) => number | null;
   /** 整块烘焙时静态层的烘焙倍率，缺省取设备像素比。分片区烘焙时倍率由镜头缩放乘设备像素比定，不用这一项。 */
   readonly bakeScale?: number;
   /** 烘焙的种子。 */
@@ -130,6 +142,8 @@ export interface ViewSettings {
   readonly height: number;
   readonly resolution: number;
   readonly camera: Camera;
+  /** 画板上字和标签要待在里面的范围，不给就不变。 */
+  readonly content?: Rect;
 }
 
 /** 选屋顶时要画的一块候选屋顶。 */
@@ -177,6 +191,16 @@ export interface RenderStats {
   /** 静态层烘焙了几次，最近一次花的毫秒。 */
   bakes: number;
   bakeMs: number;
+  /** 静态层现在显示的两种状态，值是它们在 LOOK_NAMES 里的下标：下面一种和上面一种。不在渐变时两个相同。 */
+  lookFrom: number;
+  lookTo: number;
+  /** 上面一种状态叠在下面一种上的比例，0 到 1。不在渐变时是 0。 */
+  mix: number;
+  /** 烘焙好的静态层纹理一共占多少字节（RGBA），所有状态加起来，以及有几种状态的纹理在内存里。 */
+  staticBytes: number;
+  looksResident: number;
+  /** 动态层最近一次换画法（图集、动态纹理、字、纸纹重画）花的毫秒。 */
+  switchMs: number;
 }
 
 const PARKED_SCALE = 0.44;
@@ -195,9 +219,11 @@ function ease(t: number): number {
 
 export class MapRenderer {
   readonly app: Application;
-  readonly stats: RenderStats = { drones: 0, tickets: 0, stations: 0, routeQuads: 0, updateMs: 0, renderMs: 0, bakes: 0, bakeMs: 0 };
+  readonly stats: RenderStats = { drones: 0, tickets: 0, stations: 0, routeQuads: 0, updateMs: 0, renderMs: 0, bakes: 0, bakeMs: 0, lookFrom: 0, lookTo: 0, mix: 0, staticBytes: 0, looksResident: 0, switchMs: 0 };
   /** 上一次 update 里挂在票杆上的小票，画板坐标。 */
   readonly ticketPoints: TicketPoint[] = [];
+  /** 上一次 update 里画出来的店名的框，画板坐标。选屋顶的文字用它躲开店名，也给调试用。 */
+  readonly nameBoxes: { shop: number; x: number; y: number; w: number; h: number }[] = [];
   private readonly opts: MapRendererOptions;
   private readonly layout: StaticLayout;
   private readonly staticRoot = new Container();
@@ -221,11 +247,15 @@ export class MapRenderer {
   private theme: Theme;
   private atlas: Atlas;
   private dyn: DynamicTextures;
+  /** 动态层现在用的画法：渐变过半之前是下面一种状态，过半之后是上面一种。 */
   private look: Look;
+  /** 静态层现在显示的：下面一种满不透明度，上面一种按比例叠上去。 */
+  private blend: LookBlend;
   private width: number;
   private height: number;
   private resolution: number;
   private cam: Camera;
+  private content: Rect | null;
   private units: MarkerUnits;
   private grain: TilingSprite | null = null;
   private readonly slotTracker = new SlotTracker();
@@ -256,26 +286,47 @@ export class MapRenderer {
   private rainFar: TilingSprite | null = null;
   private rainNear: TilingSprite | null = null;
   private lastSeconds = 0;
+  /** 上一次 update 的墙上时间，毫秒。片区的淡入淡出按它走，游戏暂停时也在走。第一次 update 时没有，片区直接到位。 */
+  private lastWallMs: number | null = null;
   private readonly frontByShop = new Map<number, ShopFront>();
+  /** 分片区烘焙时店名按现在的字号重新挑位置用的：城市里的屋顶，每个片区的街区范围，每座屋顶在哪个片区。整块烘焙时没有。 */
+  private readonly nameWorld: NameWorld | null;
+  private readonly footprints: readonly (readonly Rect[])[];
+  private readonly districtOfBuilding: Int8Array | null;
+  /** 店名摆好的位置，同样的字号和同样的开张的店不重新挑。 */
+  private nameCache: { key: string; origins: ReadonlyMap<number, Vec> } | null = null;
+  /** 镜头正在挪向的那个镜头的放大倍数：挪动期间店名按挪完之后的字号挑位置，不随每帧的缩放跳来跳去。 */
+  private moveUnits: MarkerUnits | null = null;
 
   private constructor(app: Application, opts: MapRendererOptions) {
     this.app = app;
     this.opts = opts;
     this.layout = opts.layout ?? { kind: 'whole' };
     this.look = opts.look;
+    this.blend = { from: opts.look, to: opts.look, mix: 0 };
     this.width = opts.width;
     this.height = opts.height;
     this.resolution = opts.resolution;
     this.cam = opts.camera;
+    this.content = opts.content ?? null;
     this.units = markerUnits(opts.camera.scale);
     this.theme = themeFor(opts.look);
     this.atlas = new Atlas(this.theme, opts.fonts, this.mipmaps);
     this.dyn = new DynamicTextures(this.theme, opts.fonts, this.mipmaps);
     for (const f of opts.city.shops) this.frontByShop.set(f.shop, f);
     this.stationRoofs = roofsByIndex(opts.city);
+    if (this.layout.kind === 'districts') {
+      this.nameWorld = { buildings: opts.city.buildings.map((b) => b.rect), roofs: opts.city.stations.map((r) => r.rect) };
+      this.footprints = districtFootprints(opts.city, this.layout.districts);
+      this.districtOfBuilding = assignDistricts(opts.city, this.layout.districts).buildings;
+    } else {
+      this.nameWorld = null;
+      this.footprints = [];
+      this.districtOfBuilding = null;
+    }
   }
 
-  /** 整张地图放进窗口时，动态纹理缩小的倍数不是整数，开 mipmap 才不会闪。整块烘焙是 1 比 1 的，不开。 */
+  /** 镜头缩放比 1 小时，动态纹理缩小的倍数不是整数，开 mipmap 才不会闪。整块烘焙是 1 比 1 的，不开。 */
   private get mipmaps(): boolean {
     return this.layout.kind === 'districts';
   }
@@ -397,10 +448,7 @@ export class MapRenderer {
     this.width = view.width;
     this.height = view.height;
     this.resolution = view.resolution;
-    this.cam = view.camera;
-    this.units = markerUnits(view.camera.scale);
     this.app.renderer.resize(view.width, view.height, view.resolution);
-    this.applyCamera();
     for (const rain of [this.rainFar, this.rainNear]) {
       if (rain !== null) {
         rain.width = view.width;
@@ -409,6 +457,20 @@ export class MapRenderer {
     }
     if (resChanged) this.buildGrain();
     else this.layoutGrain();
+    this.setCamera(view.camera, view.content);
+  }
+
+  /**
+   * 只换镜头，窗口大小不变，立刻生效：画板按新的镜头摆放，静态层的纹理按新的比例拉伸，会动的东西和字的放大倍数按新的缩放重算。
+   * 镜头在几十帧里逐帧挪动时每帧调用它，很便宜，moveTo 是它要挪到的镜头，挪动期间店名按挪完之后的字号挑位置。
+   * 静态层的重新烘焙要另外调 refreshStatic，挪完之后烘焙一次。
+   */
+  setCamera(camera: Camera, content?: Rect, moveTo?: Camera): void {
+    this.cam = camera;
+    if (content !== undefined) this.content = content;
+    this.moveUnits = moveTo === undefined ? null : markerUnits(moveTo.scale);
+    this.units = markerUnits(camera.scale);
+    this.applyCamera();
     const textRes = this.pickTextResolution();
     if (textRes !== this.textResolution) {
       this.textResolution = textRes;
@@ -416,44 +478,127 @@ export class MapRenderer {
     }
   }
 
-  /** 静态层要不要重新烘焙：倍率变了，或者窗口比烘焙的范围大了。 */
-  get staticStale(): boolean {
-    return this.statics.needsBake(this.look, this.bakeScale(), this.visible());
+  /** 现在显示着的状态：没有渐变时一种，渐变中两种。 */
+  private displayed(): Look[] {
+    return this.blend.mix > 0 ? [this.blend.from, this.blend.to] : [this.blend.from];
   }
 
-  /** 重新烘焙静态层，没有要烘焙的就什么也不做。返回这次烘焙花的毫秒。 */
-  refreshStatic(): number {
-    const ms = this.statics.ensure(this.look, this.bakeScale(), this.visible());
-    if (ms > 0) this.statics.show(this.look);
+  /** 把现在的画面摆到静态层上。要显示的状态都要先烘焙好。纹理没有换过时只改不透明度。 */
+  private showStatics(): void {
+    this.statics.show(this.blend.from, this.blend.to, this.blend.mix);
+    this.stats.lookFrom = LOOK_NAMES.indexOf(this.blend.from);
+    this.stats.lookTo = LOOK_NAMES.indexOf(this.blend.to);
+    this.stats.mix = this.blend.mix;
+  }
+
+  private syncBakeStats(): void {
     this.stats.bakes = this.statics.bakes;
     this.stats.bakeMs = this.statics.lastBakeMs;
+    this.stats.staticBytes = this.statics.textureBytes();
+    this.stats.looksResident = this.statics.bakedLooks().length;
+  }
+
+  /**
+   * 镜头马上要挪向 target：先让底层（河）盖住挪动过程中窗口会看到的全部地方。
+   * 底层只烘焙窗口盖住的一块，镜头拉远之后窗口盖住的更大，所以这里把现在和 target 两处窗口盖住的并集都烘焙进去，倍率还是现在的。
+   * 其余各层是整个片区一块，已经烘焙好了，不用动。挪完之后调 refreshStatic，按新的倍率把所有层重新烘焙一次。
+   * 渐变期间显示着两种状态，两种都要铺大。
+   */
+  prepareMove(target: Camera): void {
+    const cover = unionRect(this.visible(), visibleBoardRect(target, this.width, this.height));
+    for (const look of this.displayed()) this.statics.ensure(look, this.bakeScale(), cover);
+    this.showStatics();
+    this.syncBakeStats();
+  }
+
+  /** 静态层要不要重新烘焙：倍率变了，或者窗口比烘焙的范围大了。 */
+  get staticStale(): boolean {
+    return this.displayed().some((look) => this.statics.needsBake(look, this.bakeScale(), this.visible()));
+  }
+
+  /** 重新烘焙静态层，没有要烘焙的就什么也不做。返回这次烘焙花的毫秒。显示着的状态都要烘焙，倍率变了的话别的状态的纹理作废。 */
+  refreshStatic(): number {
+    let ms = 0;
+    for (const look of this.displayed()) ms += this.statics.ensure(look, this.bakeScale(), this.visible());
+    this.showStatics();
+    this.syncBakeStats();
     return ms;
   }
 
   /** 把另一种状态的静态层也烘焙好，一次一种，每烘焙一种返回。切换时就不用等。 */
   warm(look: Look): void {
     this.statics.ensure(look, this.bakeScale(), this.visible());
-    this.stats.bakes = this.statics.bakes;
-    this.stats.bakeMs = this.statics.lastBakeMs;
+    this.syncBakeStats();
   }
 
-  /** 换状态：静态层换纹理，图集和动态纹理按新色板重画，航线的混合模式和底色跟着换。 */
+  /**
+   * 把接下来要用的状态提前烘焙好：空闲时每帧调用一次，一次只烘焙一层，把耗时摊到几帧里。
+   * looks 是接下来一段时间里要用到的状态。烘焙好的纹理留着复用，一天里每种状态只烘焙一次，窗口大小变了才重新烘焙。
+   * 窗口刚变过、静态层还没按新的倍率烘焙时什么也不做。返回这次花的毫秒，没有要烘焙的为 0。
+   */
+  warmAhead(looks: readonly Look[]): number {
+    const scale = this.bakeScale();
+    const resident = this.statics.scale();
+    if (resident !== null && Math.abs(resident - scale) > 1e-9) return 0;
+    let ms = 0;
+    for (const look of looks) {
+      ms = this.statics.bakeOne(look, scale, this.visible());
+      if (ms > 0) break;
+    }
+    if (ms > 0) {
+      // 显示着的状态的某一层重新烘焙过（窗口比烘焙的范围大了）时，换上新的纹理
+      this.showStatics();
+      this.syncBakeStats();
+    }
+    return ms;
+  }
+
+  /**
+   * 换这一刻的画面：静态层下面一种状态满不透明度，上面一种按比例叠上去，底色按同样的比例混合。
+   * 动态层的画法渐变过半时换一次，不渐变（见文件开头）。
+   * 要显示的状态没烘焙好就现在补上，平时已经由 warmAhead 提前烘焙好了。每帧调用都行，没有变化时只比较几个值。
+   */
+  setBlend(blend: LookBlend): void {
+    const mix = blend.to !== blend.from && blend.mix > MIN_MIX ? Math.min(1, blend.mix) : 0;
+    const next: LookBlend = { from: blend.from, to: mix > 0 ? blend.to : blend.from, mix };
+    const prev = this.blend;
+    if (next.from !== prev.from || next.to !== prev.to || next.mix !== prev.mix) {
+      this.blend = next;
+      let baked = false;
+      for (const look of this.displayed()) {
+        if (this.statics.hasAll(look)) continue;
+        // 倍率和已有的纹理一致：窗口大小变化的过程中，正在显示的纹理不会被换掉
+        this.statics.ensure(look, this.statics.scale() ?? this.bakeScale(), this.visible());
+        baked = true;
+      }
+      this.showStatics();
+      this.app.renderer.background.color = mixColor(palFor(next.from).paper, palFor(next.to).paper, next.mix);
+      if (baked) this.syncBakeStats();
+    }
+    const look = dominantLook(this.blend);
+    if (look !== this.look) this.applyDynamicLook(look);
+  }
+
+  /** 固定用一种状态，不渐变。 */
   setLook(look: Look): void {
-    if (look === this.look) return;
+    this.setBlend({ from: look, to: look, mix: 0 });
+  }
+
+  /** 动态层换一种画法：图集和动态纹理按新色板重画，航线的混合模式、字的描边和纸纹跟着换。 */
+  private applyDynamicLook(look: Look): void {
+    const t0 = performance.now();
     this.look = look;
     this.theme = themeFor(look);
-    this.refreshStatic();
-    this.statics.show(look);
     this.atlas.destroy();
     this.dyn.destroy();
     this.atlas = new Atlas(this.theme, this.opts.fonts, this.mipmaps);
     this.dyn = new DynamicTextures(this.theme, this.opts.fonts, this.mipmaps);
-    const blend = this.routeBlend();
-    for (const batch of [...this.tail.flat(), ...this.lead]) batch.setBlendMode(blend);
-    this.app.renderer.background.color = this.theme.pal.paper;
+    const mode = this.routeBlend();
+    for (const batch of [...this.tail.flat(), ...this.lead]) batch.setBlendMode(mode);
     this.rebuildTexts();
     this.buildGrain();
     this.updateRainVisibility();
+    this.stats.switchMs = performance.now() - t0;
   }
 
   /** 手写体的字，纸白描边。描边的颜色跟着状态的纸面走，所以换状态时要重建。 */
@@ -472,8 +617,14 @@ export class MapRenderer {
     this.pools.overflowTexts = new Pool<Text>(this.layers.labels, () => this.makeText(21, this.theme.pal.red));
   }
 
+  /** 动态层现在用的画法对应的状态。 */
   get currentLook(): Look {
     return this.look;
+  }
+
+  /** 静态层现在显示的画面。 */
+  get currentBlend(): LookBlend {
+    return this.blend;
   }
 
   /** 静态层现在有多少块纹理，调试用。 */
@@ -580,7 +731,10 @@ export class MapRenderer {
     const P = this.pools;
     for (const pool of Object.values(P)) pool.begin();
     this.ticketPoints.length = 0;
-    this.statics.setModes(frame.districts ?? NO_MODES);
+    this.nameBoxes.length = 0;
+    const wallDt = this.lastWallMs === null ? Number.POSITIVE_INFINITY : Math.max(0, (t0 - this.lastWallMs) / 1000);
+    this.lastWallMs = t0;
+    this.statics.setModes(frame.districts ?? NO_MODES, wallDt);
 
     // 选屋顶时的候选屋顶
     for (const r of frame.roofs ?? []) {
@@ -611,7 +765,8 @@ export class MapRenderer {
     for (const st of state.stations) {
       if (st.removed) continue;
       const { rect, center } = stationRoofRect(this.stationRoofs, state, st.id, this.opts.roofOfStation(state, st.id));
-      const slots = slotWorldPositions(rect.x, rect.y, rect.w, rect.h, st.bays);
+      const limit = this.opts.bayLimit?.(state, st.id) ?? st.bays;
+      const slots = slotWorldPositions(rect.x, rect.y, rect.w, rect.h, st.bays, limit);
       const radius = Math.max(60, Math.sqrt(rect.w * rect.w + rect.h * rect.h) / 2 + 16);
       stationGeo.set(st.id, { rect, center, slots, radius });
       roofRects.push(inflate(rect, 3));
@@ -635,7 +790,7 @@ export class MapRenderer {
         sel.scale.set(1);
       }
       // 停机位
-      const size = slotSize(rect.h, st.bays);
+      const size = slotSize(rect.h, st.bays, limit);
       for (const sp of slots) {
         const slot = P.slots.next();
         const q = board.toBoard(sp.x, sp.y);
@@ -668,7 +823,8 @@ export class MapRenderer {
     const first = firstOrderSince(state, Math.floor(nowSteps) - 2400);
     const shops = waitingTickets(state, nowSteps, first);
     const open = new Set<number>();
-    const frontDepth = 46 + 26 * (U.ticket - 1);
+    const depth = frontDepth(U.ticket);
+    const placedNames = this.shopNameOrigins(state);
     for (const front of this.opts.city.shops) {
       if (!this.opts.shopOpen(state, front.shop)) continue;
       open.add(front.shop);
@@ -681,7 +837,7 @@ export class MapRenderer {
       spr.position.set(p.x, p.y);
       spr.rotation = board.angle + (front.angle * Math.PI) / 180;
       spr.scale.set(1);
-      const corners = [frontPoint(front, r0 - 6, 0), frontPoint(front, r1 + 6, 0), frontPoint(front, r0 - 6, frontDepth), frontPoint(front, r1 + 6, frontDepth)].map((w) => board.toBoard(w.x, w.y));
+      const corners = [frontPoint(front, r0 - 6, 0), frontPoint(front, r1 + 6, 0), frontPoint(front, r0 - 6, depth), frontPoint(front, r1 + 6, depth)].map((w) => board.toBoard(w.x, w.y));
       const zx0 = Math.min(...corners.map((q) => q.x));
       const zy0 = Math.min(...corners.map((q) => q.y));
       const zone: Rect = { x: zx0, y: zy0, w: Math.max(...corners.map((q) => q.x)) - zx0, h: Math.max(...corners.map((q) => q.y)) - zy0 };
@@ -692,7 +848,9 @@ export class MapRenderer {
         const ns = P.shopNames.next();
         ns.texture = nt;
         ns.anchor.set(nt.defaultAnchor?.x ?? 0, nt.defaultAnchor?.y ?? 0);
-        const q = board.toBoard(front.name.x, front.name.y);
+        // 分片区烘焙时店名的位置是按现在的字号重新挑的，整块烘焙时用城市生成时挑的
+        const origin = placedNames?.get(front.shop) ?? front.name;
+        const q = board.toBoard(origin.x, origin.y);
         ns.position.set(q.x, q.y);
         ns.rotation = board.angle;
         ns.scale.set(U.text);
@@ -714,14 +872,16 @@ export class MapRenderer {
         const nx0 = Math.min(...nameCorners.map((c) => c.x));
         const ny0 = Math.min(...nameCorners.map((c) => c.y));
         const nameRect: Rect = { x: nx0, y: ny0, w: Math.max(...nameCorners.map((c) => c.x)) - nx0, h: Math.max(...nameCorners.map((c) => c.y)) - ny0 };
-        // 小票放大之后票杆和小票伸得更远，可能压住店名：把店名挪到小票和票杆外面。不放大时城市生成已经让开了
-        const away = U.ticket > 1 ? moveClear(nameRect, zone, occupied.slice(0, -1)) : { x: 0, y: 0 };
+        // 小票放大之后票杆和小票伸得更远，可能压住店名：把店名挪到小票和票杆外面。不放大时城市生成已经让开了。
+        // 重新挑过位置的店名已经躲开了自己的门面，不用再挪
+        const away = placedNames === null && U.ticket > 1 ? moveClear(nameRect, zone, occupied.slice(0, -1)) : { x: 0, y: 0 };
+        let shown = nameRect;
         if (away.x !== 0 || away.y !== 0) {
           ns.position.set(q.x + away.x, q.y + away.y);
-          occupied.push({ x: nameRect.x + away.x, y: nameRect.y + away.y, w: nameRect.w, h: nameRect.h });
-        } else {
-          occupied.push(nameRect);
+          shown = { x: nameRect.x + away.x, y: nameRect.y + away.y, w: nameRect.w, h: nameRect.h };
         }
+        occupied.push(shown);
+        this.nameBoxes.push({ shop: front.shop, ...shown });
       }
     }
     let ticketCount = 0;
@@ -953,12 +1113,44 @@ export class MapRenderer {
   }
 
   /**
+   * 分片区烘焙时给开着的店重新挑店名的位置（names.ts），按字号和开张的店缓存，字号和开张的店没变就不重新挑。
+   * 整块烘焙时返回 null，店名用城市生成时挑的位置。返回的是字的原点（左端基线），世界坐标。
+   */
+  private shopNameOrigins(state: SimState): ReadonlyMap<number, Vec> | null {
+    const world = this.nameWorld;
+    const buildingDistrict = this.districtOfBuilding;
+    if (world === null || buildingDistrict === null) return null;
+    const units = this.moveUnits ?? this.units;
+    const fronts = this.opts.city.shops.filter((f) => this.opts.shopOpen(state, f.shop) && this.opts.shopName(f.shop) !== null);
+    const key = `${units.text}|${units.ticket}|${fronts.map((f) => f.shop).join(',')}`;
+    if (this.nameCache !== null && this.nameCache.key === key) return this.nameCache.origins;
+    const sites: NameSite[] = fronts.map((front) => {
+      const nt = this.dyn.label(this.opts.shopName(front.shop) as string, this.opts.sansFont, 13);
+      const w = nt.width * units.text;
+      const h = nt.height * units.text;
+      const district = buildingDistrict[front.building] as number;
+      return {
+        shop: front.shop,
+        front,
+        zone: frontZone(front, units.ticket),
+        rail: railEnds(front, units.ticket),
+        depth: frontDepth(units.ticket),
+        size: { w, h, ax: (nt.defaultAnchor?.x ?? 0) * w, ay: (nt.defaultAnchor?.y ?? 0) * h },
+        footprint: this.footprints[district] ?? [],
+      };
+    });
+    const origins = placeNames(sites, world);
+    this.nameCache = { key, origins };
+    return origins;
+  }
+
+  /**
    * 站点上空「{n} 架等降落」的字：先试圈的正上方，再试右上、左上、下面、两侧，取压住别的东西最少的位置，
    * 躲开站点屋顶、店的门面和票杆、店名、已经放好的字，也尽量不出画面。
    */
   private placeHoldLabels(list: readonly { cx: number; cy: number; radius: number; count: number }[], occupied: readonly Rect[], pool: Pool<Text>): void {
     const placed: Rect[] = [];
-    const view: Rect = this.opts.content ?? this.visible();
+    const view: Rect = this.content ?? this.visible();
     const k = this.units.text;
     for (const h of list) {
       const text = pool.next();

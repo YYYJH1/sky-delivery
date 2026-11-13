@@ -91,17 +91,39 @@ const DAY_DISTRICT: Check = obj({
 });
 
 const DAY_RECORD: Check = obj({
-  ...fields({ int: 'day step ordered resolved onTime late cancelled pending', num: 'income' }),
+  ...fields({ int: 'day step ordered resolved onTime late cancelled pending peaksJudged peaksCleared', num: 'income' }),
   districts: arr(DAY_DISTRICT),
+});
+
+/** 小结对照：同一批订单按开局策略的结果。 */
+const PEAK_BASELINE: Check = obj({
+  ...fields({ int: 'orders onTime late lateOpen cancelled', num: 'revenue', bool: 'lowLoad' }),
+  districts: arr(obj({ ...fields({ int: 'district n onTime' }), pct: nullable(num) })),
 });
 
 const PEAK_RECORD: Check = obj({
   ...fields({ int: 'day step orders onTime late lateOpen cancelled', num: 'revenue', str: 'peak select', bool: 'changedMidPeak' }),
-  districts: arr(obj({ ...fields({ int: 'district n onTime' }), pct: nullable(num), delta: nullable(num) })),
+  districts: arr(
+    obj({
+      ...fields({ int: 'district n onTime' }),
+      pct: nullable(num),
+      delta: nullable(num),
+      line: nullable(num),
+      met: nullable(bool),
+    }),
+  ),
   segments: nullable(obj(fields({ num: 'waitDrone waitGate waitPrep road' }))),
   early: nullable(int),
   main: obj(fields({ str: 'id' })),
   extra: nullable(obj(fields({ str: 'id' }))),
+  cleared: nullable(bool),
+  baseline: nullable(PEAK_BASELINE),
+});
+
+/** 最近一场高峰各片区的目标。 */
+const PEAK_GOALS: Check = obj({
+  ...fields({ int: 'day step', str: 'peak' }),
+  goals: arr(obj({ ...fields({ int: 'district', str: 'kind basis' }), line: nullable(num) })),
 });
 
 const TIP_RECORD: Check = obj({
@@ -127,6 +149,7 @@ const CAMPAIGN: Check = obj({
   peaks: arr(PEAK_RECORD),
   tips: arr(TIP_RECORD),
   ending: nullable(obj(fields({ int: 'step days orders' }))),
+  goals: nullable(PEAK_GOALS),
   away: arr(obj(fields({ int: 'step', num: 'seconds amount' }))),
 });
 

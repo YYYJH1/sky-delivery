@@ -1,4 +1,4 @@
-// 「先送哪张单」栏。
+// 「调度策略」栏。
 import { DROP_SECONDS, DT, PICK_SECONDS, PROMISE_SECONDS, SPEED } from '../constants.ts';
 import type { Order } from '../types.ts';
 import { DISTRICT_CAMPUS, DISTRICT_OFFICE, DISTRICT_OLD } from '../world.ts';
@@ -12,7 +12,7 @@ function indices(n: number): number[] {
   return Array.from({ length: n }, (_, k) => k);
 }
 
-/** 先下单的先送：按下单时间排序。 */
+/** 先到先送：按下单时间排序。 */
 export const fifoRule: SelectRule = {
   id: 'fifo',
   rank(ctx) {
@@ -49,7 +49,7 @@ function deadlineKeys(ctx: DispatchContext, orders: readonly Order[]): { group: 
 }
 
 /**
- * 快超时的先送：在还赶得上承诺时间的订单里，先送剩余时间最少的。
+ * 时限优先：在还赶得上承诺时间的订单里，先送剩余时间最少的。
  * 已经赶不上的排在赶得上的后面，没有可用飞机的排在最后。
  */
 export const deadlineRule: SelectRule = {
@@ -71,7 +71,7 @@ export const deadlineRule: SelectRule = {
 };
 
 /**
- * 来回快的先送：先送整趟用时最短的订单。整趟是站到店、店到楼、楼回站，取各架可用飞机里最短的。
+ * 短程优先：先送整趟用时最短的订单。整趟是站到店、店到楼、楼回站，取各架可用飞机里最短的。
  * 没有可用飞机能接的订单排在最后，它们之间按店到楼的用时从短到长。用时相同时按下单时间，再按编号。
  */
 export const roundtripRule: SelectRule = {
@@ -93,7 +93,7 @@ export const roundtripRule: SelectRule = {
 };
 
 /**
- * 某一片的先送：送到指定片区的订单排在最前，各自内部按「快超时的先送」排。
+ * {片区}优先：送到指定片区的订单排在最前，各自内部按「时限优先」排。
  * 核心里每个片区登记一张卡，界面把它们合成一张带参数的卡。
  */
 function prioDistrictRule(id: string, district: number): SelectRule {

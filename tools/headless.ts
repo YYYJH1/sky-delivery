@@ -25,9 +25,9 @@ const HELP = `用法：npm run headless -- [选项]
   --layout <名称>     ${LAYOUTS.join(' | ')}（默认 ${DEFAULT_CONFIG.layout}）
   --drones <n>        飞机数（默认 ${DEFAULT_CONFIG.drones}）
   --rate <x>          高峰每分钟订单数（默认 ${DEFAULT_CONFIG.peakRate}）
-  --select <规则>     先送哪张单：${ruleIds('select').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.select}）
-  --zone <规则>       别的站帮不帮：${ruleIds('zone').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.zone}）
-  --pool <规则>       一趟送几单：${ruleIds('pool').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.pool}）
+  --select <规则>     调度策略：${ruleIds('select').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.select}）
+  --zone <规则>       协同策略：${ruleIds('zone').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.zone}）
+  --pool <规则>       合单策略：${ruleIds('pool').join(' | ')}（默认 ${DEFAULT_CONFIG.rules.pool}）
   --capacity <n>      载量，一趟最多装几份，大单占 2 份（默认 ${DEFAULT_CONFIG.capacity}，要一起送需要 2 以上）
   --gate <秒>         起降口两次动作开始之间的最小间隔（默认 ${DEFAULT_CONFIG.gateInterval}）
   --days <n>          游戏日数（默认 3）
@@ -220,7 +220,7 @@ function describeRun(base: ConfigOverrides, days: number, seeds: number[]): stri
   const rule = (id: string): string => `${RULE_NAMES[id] ?? id}(${id})`;
   return [
     `场景 ${cfg.scenario} · 布局 ${cfg.layout} · 飞机 ${cfg.drones} · 高峰 ${cfg.peakRate} 单/分钟`,
-    `先送哪张单 ${rule(cfg.rules.select)} · 别的站帮不帮 ${rule(cfg.rules.zone)} · 一趟送几单 ${rule(cfg.rules.pool)} · 载量 ${cfg.capacity} · 起降间隔 ${cfg.gateInterval} 秒`,
+    `调度策略 ${rule(cfg.rules.select)} · 协同策略 ${rule(cfg.rules.zone)} · 合单策略 ${rule(cfg.rules.pool)} · 载量 ${cfg.capacity} · 起降间隔 ${cfg.gateInterval} 秒`,
     `${days} 天 · 地图种子 ${cfg.mapSeed} · 种子 ${seeds.join(',')} · 指标取第 ${days > 1 ? '2' : '1'} 天起的平均`,
   ].join('\n');
 }

@@ -56,15 +56,12 @@ export interface MapPlan {
   readonly board: Board;
   /** 城市要生成的世界范围：片区外框加 MAP_MARGIN，一个正的矩形。 */
   readonly region: Rect;
-  /** 镜头要放进窗口的范围，画板坐标。就是整块画板。 */
+  /** 三个片区都显示时镜头要放进窗口的范围，画板坐标，就是整块画板。只显示一部分片区时的范围见 mapRegion。 */
   readonly content: Rect;
 }
 
-/**
- * 整张地图的画板：三个片区的外框加四周一圈留白，转 angle 之后取外接框。画板的 1 个单位就是世界的 1 个单位，
- * 镜头的缩放和偏移放在 camera.ts，所以窗口大小变了，城市和画板都不用重新生成。
- */
-export function planMapBoard(districts: readonly Rect[], angle = MAP_ANGLE, margin = MAP_MARGIN): MapPlan {
+/** 一组片区的外框加四周一圈留白，是一个正的矩形（世界坐标）。镜头框住哪几个片区，就取这几个片区的 mapRegion。 */
+export function mapRegion(districts: readonly Rect[], margin = MAP_MARGIN): Rect {
   if (districts.length === 0) throw new RangeError('render: a map needs at least one district');
   let x0 = Number.POSITIVE_INFINITY;
   let y0 = Number.POSITIVE_INFINITY;
@@ -76,7 +73,15 @@ export function planMapBoard(districts: readonly Rect[], angle = MAP_ANGLE, marg
     x1 = Math.max(x1, d.x + d.w);
     y1 = Math.max(y1, d.y + d.h);
   }
-  const region: Rect = { x: x0 - margin, y: y0 - margin, w: x1 - x0 + 2 * margin, h: y1 - y0 + 2 * margin };
+  return { x: x0 - margin, y: y0 - margin, w: x1 - x0 + 2 * margin, h: y1 - y0 + 2 * margin };
+}
+
+/**
+ * 整张地图的画板：三个片区的外框加四周一圈留白，转 angle 之后取外接框。画板的 1 个单位就是世界的 1 个单位，
+ * 镜头的缩放和偏移放在 camera.ts，所以窗口大小变了，城市和画板都不用重新生成。
+ */
+export function planMapBoard(districts: readonly Rect[], angle = MAP_ANGLE, margin = MAP_MARGIN): MapPlan {
+  const region = mapRegion(districts, margin);
   const c = Math.abs(Math.cos(angle));
   const s = Math.abs(Math.sin(angle));
   const width = region.w * c + region.h * s;

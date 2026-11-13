@@ -31,6 +31,8 @@ export interface NoteView {
   readonly text: string;
   /** 整句里片区名之后的部分，界面把片区名和星画在一起，再接这一部分。 */
   readonly rest: string;
+  /** 补充：距离保住星级的余量，和距离升星还差几单。没有可写的时候为 null。 */
+  readonly extra: string | null;
 }
 
 function need<T>(value: T | null, name: string): T {
@@ -81,6 +83,24 @@ export function noteText(note: DistrictNote): string {
   }
 }
 
+/**
+ * 片区纸条的补充，写在升星条件的后面：三星以上写最近两天的准时率比保星线高或低几个百分点，
+ * 没到下一星的准时率线时写还要连续准时几单。两段之间空一个全角空格。还没有订单、订单不到下限、处在「可能掉星」的状态时不写，那几条自己已经说了准时率。
+ */
+export function noteExtra(note: DistrictNote): string | null {
+  if (note.kind !== 'firstDay' && note.kind !== 'toTwoStars' && note.kind !== 'toNextStar' && note.kind !== 'maxStars') return null;
+  let margin: string | null = null;
+  if (note.keep !== null && note.margin !== null) {
+    const need = note.keep.onTimeMin;
+    if (note.margin > 0) margin = fmt(STR.metrics.note.margin, { need, points: note.margin });
+    else if (note.margin < 0) margin = fmt(STR.metrics.note.marginLow, { need, points: -note.margin });
+    else margin = fmt(STR.metrics.note.marginEven, { need });
+  }
+  const shortfall = note.shortfall === null ? null : fmt(STR.metrics.note.shortfall, { count: note.shortfall });
+  if (margin !== null && shortfall !== null) return fmt(STR.metrics.note.both, { marginText: margin, needText: shortfall });
+  return margin ?? shortfall;
+}
+
 /** 某个片区现在的片区纸条。 */
 export function noteView(state: SimState, district: number): NoteView {
   const note = districtNote(state, district);
@@ -94,6 +114,7 @@ export function noteView(state: SimState, district: number): NoteView {
     atRisk: note.atRisk,
     text,
     rest: text.startsWith(name) ? text.slice(name.length) : text,
+    extra: noteExtra(note),
   };
 }
 

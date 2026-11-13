@@ -1,5 +1,5 @@
-// 经营模式的规矩卡表（内容表 rules_v1）：调度台每一栏玩家能选的卡。删掉了「一趟送一单」，
-// 没买双层货箱时核心内部仍按一趟送一单运行（这一栏不开放），买下双层货箱时自动换成「顺路的一起送」，沙盒模式不变。
+// 经营模式的策略卡表（内容表 rules_v1）：调度台每一栏玩家能选的卡。删掉了「单独配送」，
+// 没买双层货箱时核心内部仍按单独配送运行（这一栏不开放），买下双层货箱时自动换成「顺路合并」，沙盒模式不变。
 import { describe, expect, it } from 'vitest';
 import { CAMPAIGN_RULES_V1 } from '../src/content/rules_v1.ts';
 import { createState, quoteCommand, ruleIds, ruleOffered, ruleOpen, setRules } from '../src/core/index.ts';
@@ -7,10 +7,10 @@ import type { RuleColumn } from '../src/core/index.ts';
 import { campaignOf, expectRejected, must, quietState, withMoney } from './campaign-helpers.ts';
 import { OPENING } from './helpers.ts';
 
-describe('经营模式的规矩卡表：调度台里没有「一趟送一单」', () => {
+describe('经营模式的策略卡表：调度台里没有「单独配送」', () => {
   const COLUMNS: readonly RuleColumn[] = ['select', 'pool', 'zone'];
 
-  it('表里列的是三栏玩家能选的卡：先送哪张单六个编号，一趟送几单只有两张，别的站帮不帮三张', () => {
+  it('表里列的是三栏玩家能选的卡：调度策略六个编号，合单策略只有两张，协同策略三张', () => {
     expect(CAMPAIGN_RULES_V1).toEqual({
       select: ['fifo', 'deadline', 'roundtrip', 'prioOld', 'prioOffice', 'prioCampus'],
       pool: ['same', 'any'],
@@ -18,7 +18,7 @@ describe('经营模式的规矩卡表：调度台里没有「一趟送一单」'
     });
   });
 
-  it('表里每一栏的卡都在核心的规则注册表里，注册表里多出来的只有「一趟送一单」：它仍在注册表里，沙盒模式还用它', () => {
+  it('表里每一栏的卡都在核心的规则注册表里，注册表里多出来的只有「单独配送」：它仍在注册表里，沙盒模式还用它', () => {
     for (const column of COLUMNS) {
       const registered = ruleIds(column);
       for (const id of CAMPAIGN_RULES_V1[column]) expect(registered, `${column}.${id}`).toContain(id);
@@ -54,7 +54,7 @@ describe('经营模式的规矩卡表：调度台里没有「一趟送一单」'
     }
   });
 
-  it('换成「一趟送一单」：失败，原因是 ruleLocked，状态不变，只读的报价也一样。和别的栏一起换，整条命令都不执行', () => {
+  it('换成「单独配送」：失败，原因是 ruleLocked，状态不变，只读的报价也一样。和别的栏一起换，整条命令都不执行', () => {
     const state = quietState();
     expectRejected(state, { type: 'setRules', rules: { pool: 'single' } }, 'ruleLocked');
     expect(quoteCommand(state, { type: 'setRules', rules: { pool: 'single' } })).toMatchObject({ ok: false, reason: 'ruleLocked', kind: 'free', price: 0 });
@@ -62,7 +62,7 @@ describe('经营模式的规矩卡表：调度台里没有「一趟送一单」'
     expect(state.rules.select).toBe('fifo');
   });
 
-  it('开局的规矩里这一栏就是 single：没买双层货箱时核心内部按一趟送一单运行，这一栏不开放，表里的两张卡也换不了', () => {
+  it('开局的策略里这一栏就是 single：没买双层货箱时核心内部按单独配送运行，这一栏不开放，表里的两张卡也换不了', () => {
     const state = withMoney(quietState());
     campaignOf(state).unlocks.poolColumn = -1;
     expect(state.rules.pool).toBe('single');
@@ -70,7 +70,7 @@ describe('经营模式的规矩卡表：调度台里没有「一趟送一单」'
     for (const id of ['same', 'any']) expectRejected(state, { type: 'setRules', rules: { pool: id } }, 'ruleLocked');
   });
 
-  it('买下双层货箱：这一栏自动换成「顺路的一起送」，之后只有两张卡可选，换成「一趟送一单」仍然失败', () => {
+  it('买下双层货箱：这一栏自动换成「顺路合并」，之后只有两张卡可选，换成「单独配送」仍然失败', () => {
     const state = withMoney(quietState());
     campaignOf(state).unlocks.poolColumn = -1;
     must(state, { type: 'buyDoubleBox' });
@@ -82,7 +82,7 @@ describe('经营模式的规矩卡表：调度台里没有「一趟送一单」'
     expect(state.rules.pool).toBe('any');
   });
 
-  it('沙盒模式不变：setRules 仍能换成「一趟送一单」', () => {
+  it('沙盒模式不变：setRules 仍能换成「单独配送」', () => {
     const sandbox = createState({ ...OPENING, rules: { pool: 'any' } });
     expect(sandbox.rules.pool).toBe('any');
     setRules(sandbox, { pool: 'single' });

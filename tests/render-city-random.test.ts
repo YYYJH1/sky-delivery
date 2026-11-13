@@ -16,7 +16,7 @@ describe.each(MAP_SEEDS)('随机地图 %i', (mapSeed) => {
   const map = randomMap(mapSeed);
   const plan = wholeMapPlan(map);
 
-  it('规格本身：片区互不相压，点位的间距、离河的距离和候选屋顶的余量都守规矩', () => {
+  it('规格本身：片区互不相压，点位的间距、离河的距离和候选屋顶的余量都守策略', () => {
     expect(map.districts.length).toBe(3);
     const rects = map.districts.map((d) => ({ x: d.x0, y: d.y0, w: d.x1 - d.x0, h: d.y1 - d.y0 }));
     for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) expect(overlaps(rects[i] as Rect, rects[j] as Rect)).toBe(false);

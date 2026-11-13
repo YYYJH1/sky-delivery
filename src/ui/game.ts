@@ -3,15 +3,16 @@
 // 把部件的点击变成核心的命令。
 // 高峰小结和日结小票的出现、暂停和收起也在这里：核心生成记录，这里发现多了一条，就让界面送出小票。
 // 游戏状态只在这里被读写。部件通过 state.ts 里的 signals 和 actions 与这里通信。
-import { attachBrowser, browserEnv, createSession } from '../app/index.ts';
+import { attachBrowser, browserEnv, createPlay, createSession } from '../app/index.ts';
+import { createBrowserAudio } from '../audio/index.ts';
 import type { Attached, BrowserEnv, SaveReport } from '../app/index.ts';
 import { STR, districtName, fmt } from '../content/strings.zh.ts';
 import type { DistrictIndex } from '../content/strings.zh.ts';
-import { applyCommand, previewDispatch, quoteCommand, settleAway, step } from '../core/index.ts';
-import type { Command, SimState } from '../core/index.ts';
+import { UNLOCK_KEYS, previewDispatch, quoteCommand, settleAway, unlock } from '../core/index.ts';
+import type { Command, SimState, UnlockKey } from '../core/index.ts';
 import { boardToScreen, worldRectToScreen, worldToScreen } from '../render/camera.ts';
 import type { Rect } from '../render/geometry.ts';
-import { districtModes } from '../render/scene.ts';
+import { districtModes, ticketState } from '../render/scene.ts';
 import { encodeSaveCode, encodeSaveText, openGameStore, saveGame, unpackSaveText } from '../save/index.ts';
 import type { IdbFactoryLike, KeyValueStore, SlotOptions, StorageLike } from '../save/index.ts';
 import { ruleCommand } from './board.ts';
@@ -21,16 +22,19 @@ import { DEBUG_NAMESPACE, applyDebug, forceHolding, padDrones, parseGameParams }
 import { acquireRunLock } from './lock.ts';
 import type { LockManagerLike } from './lock.ts';
 import { CARD_HEIGHT, CARD_WIDTH, cardPlacement, estimateWidth, layoutRoofLabels, roofLabelFontPx, tooltipPlacement } from './map-layout.ts';
+import type { PlacedRoofLabel } from './map-layout.ts';
 import { hitTest, pickDistrict, ticketReach } from './map-hit.ts';
 import type { Hit, MapTargets } from './map-hit.ts';
-import { districtAnchor, districtBoxes, roofBoxes, stationAnchor, stationBoxes } from './map-state.ts';
+import { districtAnchor, districtBoxes, districtLabelRects, roofBoxes, stationAnchor, stationBoxes } from './map-state.ts';
 import { createMapView } from './map-view.ts';
 import type { MapView } from './map-view.ts';
 import { orderHoverText } from './names.ts';
 import { nextNoteDistrict, noteDistrictFor } from './note.ts';
 import { freshSince, seenOf } from './notices.ts';
 import { failureContext, failureText, hintText } from './reasons.ts';
-import { roofLines } from './roofs.ts';
+import { roofLabelLines } from './roofs.ts';
+import { orderSpot, sameSpot, tipSpot, tipTarget } from './tip-anchor.ts';
+import type { TipSpot } from './tip-anchor.ts';
 import {
   actions,
   anchor,
@@ -43,12 +47,14 @@ import {
   endingOpen,
   exportCode,
   importOpen,
+  mapFailed,
   menuOpen,
   noteDistrict,
   pickingDistrict,
   roofLabels,
   run,
   selected,
+  soundOn,
   summaryPhase,
   toast,
   tooltip,
@@ -81,7 +87,9 @@ export interface SkyDebug {
   dots(): { orderId: number; x: number; y: number }[];
   /** 世界里的一个点在窗口里的位置。 */
   toScreen(x: number, y: number): { x: number; y: number };
-  /** 地图渲染器的统计：飞机、小票、站、航线的段数，上一帧更新花的毫秒，静态层烘焙了几次和花的毫秒，窗口大小和设备像素比。 */
+  /** 画出来的店名在窗口里的框，左上角加宽高，带店的序号。 */
+  names(): { shop: number; x: number; y: number; w: number; h: number }[];
+  /** 地图渲染器的统计：飞机、小票、站、航线的段数，上一帧更新花的毫秒，静态层烘焙了几次和花的毫秒，窗口大小和设备像素比，镜头的缩放，镜头是否在挪动（moving），地图是否画出来了（drawn）。 */
   stats(): Record<string, number>;
   /** 把飞机补到 total 架，平分给各站，只给性能测试用。会改游戏状态。 */
   pad(total: number): number;
@@ -103,6 +111,8 @@ export interface SkyDebug {
   pack(json: string): Promise<string>;
   /** 按页面现在的状态，假装已经离开了 seconds 秒，结算离开期间的进账，返回进账的金额，没有为 0。 */
   away(seconds: number): number;
+  /** 打开一个开放项，例如 showOffice 让写字楼区显示出来，镜头随之拉远。名字不对或者早已打开时返回 false。会改游戏状态。 */
+  unlock(key: string): boolean;
 }
 
 declare global {
@@ -179,7 +189,8 @@ export async function startGame(els: GameElements, search: string): Promise<void
   const params = parseGameParams(search);
 
   // ---- 窗口和镜头 ----
-  // 地图整张放进窗口，没有平移和缩放的操作。窗口大小变了，镜头立刻换，静态层等大小定下来再重新烘焙一次（map-view.ts）
+  // 镜头框住已经显示的片区，没有平移和缩放的操作。片区第一次显示时镜头拉远，每帧挪一点，贴着地图的界面物件跟着挪。
+  // 窗口大小变了，镜头立刻换，静态层等大小定下来再重新烘焙一次（map-view.ts）
   let width = 0;
   let height = 0;
   let dpr = 1;
@@ -198,9 +209,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
     fit();
     if (state !== null && map !== null) {
       // 镜头变了，贴着地图上东西的界面物件跟着挪
-      updateAnchor();
-      updateDistrictAnchors(uiData.peek());
-      updateRoofLabels();
+      syncAnchors();
       renderFrame();
     }
   });
@@ -225,8 +234,9 @@ export async function startGame(els: GameElements, search: string): Promise<void
   if (booted.savedStep === null) applyDebug(game, params);
   fit();
   // 地图：等字体载入完，生成城市，起 PixiJS，烘焙静态层。这一段要一两秒，界面在地图准备好之后才出现
-  const mapView: MapView = await createMapView({ canvas, look: params.look ?? 'day', view: { width, height, dpr, uiScale: windowView.peek().scale } });
+  const mapView: MapView = await createMapView({ canvas, look: params.look ?? 'day', step: game.step, view: { width, height, dpr, uiScale: windowView.peek().scale }, modes: districtModes(game) });
   map = mapView;
+  if (!mapView.drawn) mapFailed.value = true;
   // 载入期间窗口大小可能变过
   fit();
   // 读到备份的提示和离开期间的进账，各是一句话，同时有时接在一起显示
@@ -238,7 +248,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
   // ---- 运行循环和自动保存 ----
   let prevX: number[] = game.drones.map((d) => d.x);
   let prevY: number[] = game.drones.map((d) => d.y);
-  // 小票边上的派单名次：核心按现在的规矩算出等待中的订单的派单先后。状态变了（走了一步，玩家点了订单、换了规矩）才重新算
+  // 小票边上的派单名次：核心按现在的策略算出等待中的订单的派单先后。状态变了（走了一步，玩家点了订单、换了策略）才重新算
   let ranks: ReadonlyMap<number, number> = new Map();
   function refreshRanks(): void {
     ranks = new Map(previewDispatch(game).ids.map((id, i) => [id, i + 1]));
@@ -258,6 +268,8 @@ export async function startGame(els: GameElements, search: string): Promise<void
     }
   }
 
+  // 推进状态和执行命令都经过 play：高峰里它另外持有一份按开局的卡运行的副本，小结里写与开局策略的对照
+  const play = createPlay(game);
   const session = createSession({
     store,
     savedStep: booted.savedStep,
@@ -272,7 +284,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
             prevX = game.drones.map((d) => d.x);
             prevY = game.drones.map((d) => d.y);
           }
-          step(game);
+          play.step();
           mapView.recordStep(game);
         }
         refreshRanks();
@@ -287,6 +299,14 @@ export async function startGame(els: GameElements, search: string): Promise<void
     },
   });
   const loop = session.loop;
+
+  // ---- 声音：第一次点击或按键之后才出声，每帧按状态的变化放音效，窗口失去焦点时调低 ----
+  const audio = createBrowserAudio();
+  audio.attach();
+  soundOn.value = audio.settings().enabled;
+  actions.toggleSound = () => {
+    soundOn.value = audio.setSettings({ enabled: !audio.settings().enabled }).enabled;
+  };
   // 读档时结算过离开期间的进账，状态比存档里的多了这一笔，让会话记一次改变，过一小会儿就存
   if (booted.away !== null) session.noteChange();
 
@@ -349,7 +369,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
 
   // ---- 命令 ----
   function execute(command: Command): { ok: true; id: number } | { ok: false } {
-    const result = applyCommand(game, command);
+    const result = play.command(command);
     if (!result.ok) {
       showToast(failureText(result.reason, failureContext(game, command, result.reason)));
       return { ok: false };
@@ -618,17 +638,62 @@ export async function startGame(els: GameElements, search: string): Promise<void
     return { x: 8, y: 104 * s, w: width - 16, h: height - 104 * s - 96 * s };
   }
 
+  /** 地图上的字：开着的店的店名，已经显示的片区的名字，窗口坐标。候选屋顶的文字尽量不盖在它们上面。 */
+  function mapTextObstacles(): Rect[] {
+    const board = mapView.board;
+    const camera = mapView.camera();
+    const out: Rect[] = [];
+    for (const b of mapView.nameBoxes()) {
+      const a = boardToScreen(camera, b.x, b.y);
+      const z = boardToScreen(camera, b.x + b.w, b.y + b.h);
+      out.push({ x: a.x, y: a.y, w: z.x - a.x, h: z.y - a.y });
+    }
+    for (const r of districtLabelRects(mapView.city.labels, districtModes(game))) out.push(worldRectToScreen(board, camera, r));
+    return out;
+  }
+
+  /** 现在贴着的便签说的是订单时，它要贴在哪张小票旁边：每帧按这一帧的镜头重新算，变了才更新。 */
+  function syncTipSpot(nowSteps: number): void {
+    const tip = uiData.peek()?.tip ?? null;
+    const target = tip === null ? null : tipTarget(tip.id);
+    let next: TipSpot | null = null;
+    if (target !== null && target.kind === 'order') {
+      const board = mapView.board;
+      const camera = mapView.camera();
+      const stations = targets.stations.map((b) => worldRectToScreen(board, camera, b.rect));
+      const isUrgent = (order: number): boolean => {
+        const o = game.orders[order];
+        return o !== undefined && ticketState(Math.max(0, nowSteps - o.tOrder)) !== 'ok';
+      };
+      next = orderSpot(mapView.ticketPoints(), camera, target.urgent, isUrgent, stations, mapTextObstacles());
+    }
+    if (!sameSpot(tipSpot.peek(), next)) tipSpot.value = next;
+  }
+
+  /** 调度台现在在窗口里占的地方，候选屋顶的文字不摆在它下面。调度台还没开放时没有。 */
+  function boardObstacles(): Rect[] {
+    const element = hud.querySelector('[data-part="board"]');
+    if (element === null) return [];
+    const r = element.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 ? [{ x: r.x, y: r.y, w: r.width, h: r.height }] : [];
+  }
+
+  function sameLeader(a: PlacedRoofLabel['leader'], b: PlacedRoofLabel['leader']): boolean {
+    if (a === null || b === null) return a === b;
+    return a.x1 === b.x1 && a.y1 === b.y1 && a.x2 === b.x2 && a.y2 === b.y2;
+  }
+
   function sameRoofLabels(a: typeof roofLabels.value, b: typeof roofLabels.value): boolean {
     return (
       a.length === b.length &&
       a.every((l, i) => {
         const o = b[i];
-        return o !== undefined && l.roof === o.roof && l.x === o.x && l.y === o.y && l.ok === o.ok && l.px === o.px && l.lines.join('\n') === o.lines.join('\n');
+        return o !== undefined && l.roof === o.roof && l.x === o.x && l.y === o.y && l.ok === o.ok && l.px === o.px && l.lines.join('\n') === o.lines.join('\n') && sameLeader(l.leader, o.leader);
       })
     );
   }
 
-  /** 选屋顶时，每块候选屋顶旁边的两行字：摆在不压住别的屋顶和站的地方。屋顶的价格随余额变，所以每次界面数据更新时重排。 */
+  /** 选屋顶时，每块候选屋顶旁边的几行字：摆在不压住别的屋顶和站的地方，离开屋顶的用细线连回去。屋顶的价格随余额变，所以每次界面数据更新时重排。 */
   function updateRoofLabels(): void {
     const candidates = buildMode.peek() ? (uiData.peek()?.build.candidates ?? []) : [];
     let next: typeof roofLabels.value = [];
@@ -638,12 +703,19 @@ export async function startGame(els: GameElements, search: string): Promise<void
       const boxes = roofBoxes(candidates, mapView.roofs);
       const inputs = boxes.flatMap((b) => {
         const c = candidates.find((x) => x.roof === b.roof);
-        return c === undefined ? [] : [{ roof: b.roof, box: worldRectToScreen(board, camera, b.rect), lines: roofLines(c), ok: c.ok }];
+        return c === undefined ? [] : [{ roof: b.roof, box: worldRectToScreen(board, camera, b.rect), lines: roofLabelLines(c), ok: c.ok }];
       });
       const stations = stationBoxes(game, mapView.roofs).map((b) => worldRectToScreen(board, camera, b.rect));
-      next = layoutRoofLabels(inputs, stations, labelBounds(), roofLabelFontPx(windowView.peek().scale));
+      next = layoutRoofLabels(inputs, [...stations, ...boardObstacles()], labelBounds(), roofLabelFontPx(windowView.peek().scale), mapTextObstacles());
     }
     if (!sameRoofLabels(roofLabels.peek(), next)) roofLabels.value = next;
+  }
+
+  /** 镜头动了：贴着地图上东西的界面物件（选中站的小卡、开通价签、候选屋顶的文字）按现在的镜头重新定位。 */
+  function syncAnchors(): void {
+    updateAnchor();
+    updateDistrictAnchors(uiData.peek());
+    updateRoofLabels();
   }
 
   function currentView(): UiView {
@@ -673,11 +745,14 @@ export async function startGame(els: GameElements, search: string): Promise<void
   }
 
   function renderFrame(): void {
+    const modes = districtModes(game);
+    // 镜头先挪到这一帧的位置：点选、悬停和界面物件的位置都按这一帧的镜头算，挪动期间也不停在旧位置
+    if (mapView.moveCamera(modes)) syncAnchors();
     const alpha = loop.alpha();
     const nowSteps = Math.max(0, game.step - 1) + alpha;
     const building = buildMode.peek();
     const candidates = building ? (uiData.peek()?.build.candidates ?? []) : [];
-    targets = { stations: stationBoxes(game, mapView.roofs), roofs: roofBoxes(candidates, mapView.roofs), tickets: mapView.renderer.ticketPoints };
+    targets = { stations: stationBoxes(game, mapView.roofs), roofs: roofBoxes(candidates, mapView.roofs), tickets: mapView.ticketPoints() };
     const surface = mapView.surface();
     // 选中站的小卡盖着的地方：等降落的字不摆在那里
     const reserved: Rect[] = [];
@@ -698,11 +773,12 @@ export async function startGame(els: GameElements, search: string): Promise<void
       nowSteps,
       ranks,
       rankLimit: RANK_LIMIT,
-      districts: districtModes(game),
+      districts: modes,
       selected: selected.peek(),
       roofs: candidates.map((c) => ({ roof: c.roof, hovered: hover !== null && hover.kind === 'roof' && hover.roof === c.roof, ok: c.ok })),
       reserved,
     });
+    syncTipSpot(nowSteps);
     // 鼠标停在小票上：旁边显示「楼名，菜名，等了几秒」
     let tip: TooltipInfo | null = null;
     if (hover !== null && hover.kind === 'ticket' && pointer !== null) {
@@ -728,6 +804,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
       refreshUi();
     }
     renderFrame();
+    audio.observe(game);
   }
 
   // ---- 鼠标 ----
@@ -848,19 +925,27 @@ export async function startGame(els: GameElements, search: string): Promise<void
       },
       roofs: () => targets.roofs.map((r) => ({ roof: r.roof, ...centerBox(r.rect) })),
       dots: () =>
-        mapView.renderer.ticketPoints.map((t) => {
+        mapView.ticketPoints().map((t) => {
           const p = boardToScreen(mapView.camera(), t.x, t.y);
           return { orderId: t.order, x: p.x, y: p.y };
         }),
       toScreen: (x, y) => worldToScreen(mapView.board, mapView.camera(), x, y),
-      stats: () => ({ ...mapView.renderer.stats, width, height, dpr, scale: mapView.camera().scale, tiles: mapView.renderer.staticTiles, cityMs: mapView.boot.cityMs, createMs: mapView.boot.createMs }),
+      names: () =>
+        mapView.nameBoxes().map((b) => {
+          const a = boardToScreen(mapView.camera(), b.x, b.y);
+          const z = boardToScreen(mapView.camera(), b.x + b.w, b.y + b.h);
+          return { shop: b.shop, x: a.x, y: a.y, w: z.x - a.x, h: z.y - a.y };
+        }),
+      stats: () => ({ ...mapView.stats(), width, height, dpr, scale: mapView.camera().scale, moving: mapView.moving() ? 1 : 0, drawn: mapView.drawn ? 1 : 0, cityMs: mapView.boot.cityMs, createMs: mapView.boot.createMs }),
       pad: (total) => {
+        play.drop(); // 副本里没有这些飞机，这一场不再对照
         const added = padDrones(game, total);
         session.noteChange();
         return added;
       },
       json: () => JSON.stringify(game),
       hold: (n) => {
+        play.drop();
         const done = forceHolding(game, n);
         session.noteChange();
         return done;
@@ -880,6 +965,12 @@ export async function startGame(els: GameElements, search: string): Promise<void
         showToast(fmt(STR.system.awayIncome, { amount: record.amount }));
         session.noteChange();
         return record.amount;
+      },
+      unlock: (key) => {
+        if (!(UNLOCK_KEYS as readonly string[]).includes(key)) return false;
+        const opened = unlock(game, key as UnlockKey);
+        if (opened) session.noteChange();
+        return opened;
       },
     };
   }

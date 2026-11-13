@@ -28,7 +28,7 @@ describe('真实运行：三个游戏日里算界面数据', () => {
     // 写字楼区开通，老街三星，开放项全部打开：白板的三栏、两个页签、几个片区都有东西可看
     const state = unlockAll(runningState(42, [3, 3, 1], [true, true, false]));
     campaignOf(state).money = 5000;
-    advance(state, 1); // 开通写字楼区之后，规矩分成午晚两套
+    advance(state, 1); // 开通写字楼区之后，策略分成午晚两套
     expect(campaignOf(state).ruleSets).not.toBeNull();
     const problems: string[] = [];
     let shownSummary = 0;

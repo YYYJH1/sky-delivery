@@ -104,7 +104,7 @@ function violations(state: SimState): string[] {
     if (order === undefined || order.status !== OrderStatus.Pending) bad.push(`pending order ${id}`);
     else if ((state.stations[order.home] as { removed: boolean }).removed) bad.push(`pending order ${id} belongs to a removed station`);
   }
-  // 规矩、开放项、便签、日结记录和送达计数的不变量
+  // 策略、开放项、便签、日结记录和送达计数的不变量
   if (campaign.ruleSets !== null) {
     const inForce = campaign.ruleSets[ruleSetInForce(state)];
     if (JSON.stringify(inForce) !== JSON.stringify(state.rules)) bad.push(`state.rules ${JSON.stringify(state.rules)} is not the set in force ${JSON.stringify(inForce)}`);
@@ -191,10 +191,10 @@ describe('经营模式：随机命令', () => {
 });
 
 describe('经营模式：各项开放全部打开时的随机命令', () => {
-  it.each([11, 12, 13])('种子 %i：四个游戏日里随机的命令穿插在运行里，包括指定改哪一套规矩、标记便签，不变量始终成立', (seed) => {
+  it.each([11, 12, 13])('种子 %i：四个游戏日里随机的命令穿插在运行里，包括指定改哪一套策略、标记便签，不变量始终成立', (seed) => {
     const { state, succeeded } = run(seed, 4 * DAY_STEPS, true);
     expect(violations(state)).toEqual([]);
-    // 各种新命令确实成功过：改规矩（含指定一套）、标记便签
+    // 各种新命令确实成功过：改策略（含指定一套）、标记便签
     expect(succeeded.setRules ?? 0).toBeGreaterThan(5);
     expect(succeeded.readTip ?? 0).toBeGreaterThan(0);
     expect(Object.keys(succeeded).length).toBeGreaterThanOrEqual(7);

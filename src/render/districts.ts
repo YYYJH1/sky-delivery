@@ -19,6 +19,19 @@ export function modeAlpha(mode: DistrictMode): number {
   return mode === 'hidden' ? 0 : mode === 'faded' ? FADED_ALPHA : 1;
 }
 
+/** 片区的显示状态变了，这一层的不透明度从 0 渐变到 1 要多久，秒。镜头拉远的同时，新显示的片区跟着淡入。 */
+export const FADE_SECONDS = 0.8;
+
+/**
+ * 不透明度朝 target 走了 dt 秒之后的值：匀速，走完 0 到 1 要 FADE_SECONDS，到了 target 就停。
+ * dt 不是有限的数时（第一次摆放）直接到 target。
+ */
+export function approachAlpha(current: number, target: number, dt: number): number {
+  if (!Number.isFinite(dt)) return target;
+  const step = Math.max(0, dt) / FADE_SECONDS;
+  return current < target ? Math.min(target, current + step) : Math.max(target, current - step);
+}
+
 function distanceToRect(r: Rect, x: number, y: number): number {
   const dx = Math.max(r.x - x, 0, x - (r.x + r.w));
   const dy = Math.max(r.y - y, 0, y - (r.y + r.h));

@@ -76,12 +76,17 @@ export interface EconomyV1 {
   openingDrones: number; // 开局的站有几架飞机
 }
 
-/** 一个片区的订单规律：高峰每分钟单数，以及天内的订单量曲线（控制点，高峰处取 1）。 */
+/**
+ * 一个片区的订单规律：高峰每分钟单数，以及天内的订单量曲线（控制点，高峰处取 1）。
+ * opening 是开业期的来单倍数：片区开通的那一天用第一项，之后每过一个游戏日用下一项，用完之后恢复 1。
+ * 空表示没有开业期（开局就开通的片区）。
+ */
 export interface DistrictRateV1 {
   id: string;
   baseRate: number;
   curveSeconds: number[];
   curveRate: number[];
+  opening: number[];
 }
 
 /** 开局固定出现的一张订单。店和楼都是地图 v1 里的下标。 */
@@ -94,7 +99,7 @@ export interface OpeningOrderV1 {
 }
 
 /**
- * 升到某一星的条件。准时率和退单率都是百分数，统计的是最近两个游戏日里有结果的订单。
+ * 升到某一星的条件。准时率和退单率都是百分数，统计的是最近两个游戏日里完成的订单。
  * 准时率不小于 onTimeMin 才算达到。退单率低于 cancelBelow 才算达到，null 表示不限。
  */
 export interface StarRuleV1 {
@@ -108,23 +113,25 @@ export interface StarsV1 {
   maxStar: number;
   windowDays: number; // 统计最近几个游戏日，第一天只有当天
   rules: StarRuleV1[]; // 升到二星、三星、四星、五星的条件，按星级从低到高
-  minSample: number; // 最近两天有结果的订单少于这个数时，这次日结星级不变，连续未达到的计数也不变（与没有订单同样处理）
+  minSample: number; // 最近两天完成的订单少于这个数时，这次日结星级不变，连续未达到的计数也不变（与没有订单同样处理）
   dropFromStar: number; // 这一星及以上才会掉星，低于它不会掉
   dropAfterMisses: number; // 连续几次日结没有达到当前星级下面一档的条件，掉一星
   endingStar: number; // 三个片区都到这一星，记下结局
+  patienceSeconds: number[]; // 顾客的耐心：送往一个片区的订单，下单后等这么多秒仍没有被取走就退单，下标是这个片区的星级减一
 }
 
 /** 栏、卡和价签的开放条件。星级和片区都用核心里的编号。 */
 export interface UnlocksV1 {
-  zoneStations: number; // 有这么多座没退回的站时，「别的站帮不帮」一栏开放，三张卡同时开放
-  ruleSetsDistrict: number; // 开通这个片区时，午晚两套规矩开放
+  zoneStations: number; // 有这么多座没退回的站时，「协同策略」一栏开放，三张卡同时开放
+  ruleSetsDistrict: number; // 开通这个片区时，午晚两套策略开放
   priceTagsBalance: number; // 第一次日结之后余额达到这个数，价签开放
-  selectLateAbove: number; // 某场高峰的小结里超时的订单（含还没送到的）超过来单的这个百分数，「先送哪张单」一栏开放
+  selectLateAbove: number; // 某场高峰的小结里超时的订单（含还没送到的）超过来单的这个百分数，「调度策略」一栏开放
   selectLatestDay: number; // 最晚在这一天（从 0 数起）的日结时开放
-  prioDistrict: number; // 「某一片的先送」看哪个片区的口碑
-  prioNoUpgrade: number; // 这个片区连续几次日结没有升星
+  prioDistrict: number; // 「{片区}优先」看哪个片区的口碑
+  prioOpensWith: number | null; // 这个片区开通时，「{片区}优先」同时开放。null 表示不随片区开通开放，改按下面两项在日结时判断
+  prioNoUpgrade: number; // prioOpensWith 为 null 时：prioDistrict 这个片区连续几次日结没有升星
   prioGapPoints: number; // 并且它最近两天的准时率比其他开通片区合在一起低这么多个百分点以上
-  roundtripDistrict: number; // 「来回快的先送」看哪个片区
+  roundtripDistrict: number; // 「短程优先」看哪个片区
   roundtripStar: number; // 它达到几星时开放
   show: { district: number; after: number; star: number }[]; // 片区 district 在片区 after 达到 star 星时显示
 }
@@ -134,9 +141,9 @@ export interface UnlocksV1 {
  * 核心的规则注册表里的卡更多：沙盒模式和对照测试都用。经营模式的 setRules 命令只认这张表里的卡，调度台也只列它们。
  */
 export interface CampaignRulesV1 {
-  select: readonly string[]; // 先送哪张单
-  pool: readonly string[]; // 一趟送几单
-  zone: readonly string[]; // 别的站帮不帮
+  select: readonly string[]; // 调度策略
+  pool: readonly string[]; // 合单策略
+  zone: readonly string[]; // 协同策略
 }
 
 /** 高峰小结的说明句和便签用到的数。 */
@@ -148,4 +155,11 @@ export interface NotesV1 {
   districtLowGap: number; // 附加句：某个片区的准时率比全城低这么多个百分点以上
   redOrderSeconds: number; // 便签：还没送到的订单下单超过这么多秒，画面上出现红色
   middleRadius: number; // 新店位置：离片区中心不超过半边长的这个比例时写「中间」
+}
+
+/** 每场高峰的目标线、过线标记和小结对照用到的数。 */
+export interface GoalsV1 {
+  minJudgedOrders: number; // 一场高峰里送往某个片区的订单不少于这个数，才判这个片区达没达标
+  minLiveOrders: number; // 高峰进行中，一个片区已完成的订单不少于这个数，才会因为离目标线最远而突出
+  lowLoadWaitSeconds: number; // 小结对照里，两种策略下订单平均等飞机的时间都低于这么多秒，算订单不多于运力
 }

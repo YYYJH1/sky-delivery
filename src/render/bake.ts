@@ -23,6 +23,10 @@ const REGISTRATION = { x: 1.5, y: 1 };
 /** 毛边的位移幅度，画板像素。 */
 const ROUGHNESS = 2;
 const MAX_TILE = 4096;
+/** 亮窗的半径，画板像素。 */
+const WINDOW_RADIUS = 1.5;
+/** 亮窗在窗口里至少这么宽，设备像素。 */
+const MIN_WINDOW_PIXELS = 2.2;
 
 export interface BakeOptions {
   readonly city: City;
@@ -298,9 +302,10 @@ export function bakeStaticLayer(opts: BakeOptions): Baked {
   }
 
   // ---- 填色层：街区、绿地、河。毛边加套印偏移 ----
+  // 填色层画完要读回像素做毛边，所以在内存里画
   const fills = makeCanvas(W, H);
   {
-    const f = context2d(fills);
+    const f = context2d(fills, true);
     setWorld(f);
     f.beginPath();
     for (const bl of city.blocks) if (bl.kind === 'normal' || bl.kind === 'track') rectPath(f, bl.rect);
@@ -413,7 +418,7 @@ export function bakeStaticLayer(opts: BakeOptions): Baked {
   // ---- 屋顶填色层：纸白，写字楼的彩钢蓝淡色，天井 ----
   const roofFills = makeCanvas(W, H);
   {
-    const f = context2d(roofFills);
+    const f = context2d(roofFills, true);
     setWorld(f);
     f.beginPath();
     for (const b of city.buildings) rectPath(f, b.rect);
@@ -496,15 +501,16 @@ export function bakeStaticLayer(opts: BakeOptions): Baked {
     ctx.restore();
   }
 
-  // ---- 亮窗：傍晚亮三成，夜间亮八成，便签黄的实色点 ----
+  // ---- 亮窗：傍晚亮三成，夜间亮八成，便签黄的实色点。整张地图缩小放进窗口时点跟着变小，所以缩得很小时放大一些，在窗口里至少两个像素宽 ----
   const lit = theme.look === 'night' ? 0.82 : theme.look === 'dusk' ? 0.3 : 0;
   if (lit > 0) {
+    const radius = Math.max(WINDOW_RADIUS, MIN_WINDOW_PIXELS / 2 / scale);
     ctx.beginPath();
     for (const b of city.buildings) {
       for (const w of b.windows) {
         if (w.t >= lit) continue;
-        ctx.moveTo(w.x + 1.5, w.y);
-        ctx.arc(w.x, w.y, 1.5, 0, Math.PI * 2);
+        ctx.moveTo(w.x + radius, w.y);
+        ctx.arc(w.x, w.y, radius, 0, Math.PI * 2);
       }
     }
     fillWith(ctx, pal.note);

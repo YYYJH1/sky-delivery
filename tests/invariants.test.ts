@@ -247,9 +247,9 @@ describe('停机位', () => {
 
 describe('电量', () => {
   it.each([
-    ['三片区 快超时 哪座站都能送', { ...CITY, peakRate: 45 }],
-    ['三片区 快超时 只由最近的站送', { ...CITY, peakRate: 68, rules: { select: 'deadline', zone: 'strict' } }],
-    ['三片区 先下单 哪座站都能送', { ...CITY, peakRate: 68, rules: { select: 'fifo', zone: 'global' } }],
+    ['三片区 快超时 全站协同', { ...CITY, peakRate: 45 }],
+    ['三片区 快超时 仅限最近站点', { ...CITY, peakRate: 68, rules: { select: 'deadline', zone: 'strict' } }],
+    ['三片区 先到先送 全站协同', { ...CITY, peakRate: 68, rules: { select: 'fifo', zone: 'global' } }],
     ['一座大站过载', { ...OVERLOAD, layout: 'single' as const }],
     ['写字楼区店很少', { ...CITY, scenario: 'sparseOffice' as const, peakRate: 60 }],
     ['两座站向外移', { ...CITY, layout: 'edge' as const, peakRate: 68 }],
@@ -274,7 +274,7 @@ describe('订单量很低时', () => {
     ['deadline', 'global'],
     ['fifo', 'strict'],
     ['deadline', 'strict'],
-  ])('退单率低于 2%%：先送哪张单 %s，别的站帮不帮 %s', (select, zone) => {
+  ])('退单率低于 2%%：调度策略 %s，协同策略 %s', (select, zone) => {
     for (const seed of [42, 43, 44, 45, 46]) {
       const state = runDays({ ...CITY, peakRate: 0.3 * 45, seed, rules: { select, zone } }, 3);
       const mean = runMetrics(state, 3).mean;
@@ -321,8 +321,8 @@ describe('换规则时订单完全相同', () => {
 
 describe('派单只派停在停机位上的飞机', () => {
   it.each([
-    ['快超时 哪座站都能送', OVERLOAD],
-    ['先下单 只由最近的站送', { ...OVERLOAD, rules: { select: 'fifo', zone: 'strict' } }],
+    ['快超时 全站协同', OVERLOAD],
+    ['先到先送 仅限最近站点', { ...OVERLOAD, rules: { select: 'fifo', zone: 'strict' } }],
     ['老街开局', { ...OPENING, peakRate: 30 }],
   ])('在空中、盘旋等降落、已接单等起飞的飞机不会被派单：%s', (_name, config) => {
     const state = createState({ ...config, seed: 42 });
@@ -363,14 +363,14 @@ describe('派单只派停在停机位上的飞机', () => {
   });
 });
 
-describe('别的站帮不帮', () => {
+describe('协同策略', () => {
   function nearestStation(state: SimState, o: Order): number {
     const m = state.world.merchants[o.merchant] as { x: number; y: number };
     const d = state.stations.map((s) => dist(m.x, m.y, s.x, s.y));
     return d.indexOf(Math.min(...d));
   }
 
-  it('「只由最近的站送」：接单的飞机属于离这家店最近的站', () => {
+  it('「仅限最近站点」：接单的飞机属于离这家店最近的站', () => {
     const state = runDays({ ...CITY, peakRate: 68, seed: 42, rules: { select: 'deadline', zone: 'strict' } }, 2);
     const assigned = state.orders.filter((o) => o.tAssign >= 0);
     expect(assigned.length).toBeGreaterThan(300);
@@ -380,7 +380,7 @@ describe('别的站帮不帮', () => {
     expect(new Set(assigned.map((o) => o.home)).size).toBe(2); // 两座站都在工作
   });
 
-  it('「哪座站都能送」：高负载时有订单由别的站的飞机送', () => {
+  it('「全站协同」：高负载时有订单由别的站的飞机送', () => {
     const state = runDays({ ...CITY, peakRate: 68, seed: 42, rules: { select: 'deadline', zone: 'global' } }, 2);
     const assigned = state.orders.filter((o) => o.tAssign >= 0);
     const other = assigned.filter((o) => o.departed !== o.home).length;
@@ -390,7 +390,7 @@ describe('别的站帮不帮', () => {
 });
 
 describe('提前派出的统计', () => {
-  it.each(['global', 'strict'])('先下单的先送：整段运行里一张订单也不记为提前派出，别的站帮不帮 %s', (zone) => {
+  it.each(['global', 'strict'])('先到先送：整段运行里一张订单也不记为提前派出，协同策略 %s', (zone) => {
     let contested = 0; // 较早的订单有飞机能接却没有派出，而更晚的订单派出了的轮数
     for (const seed of [42, 43, 44, 45, 46, 47, 48, 49]) {
       const state = createState({ ...CITY, seed, orderEndStep: 2 * DAY_STEPS, rules: { select: 'fifo', zone } });
@@ -524,13 +524,13 @@ describe('飞机状态机', () => {
 });
 
 // ---- 一起送 ----
-/** 一趟送几单的几组配置：高负载，让插入大量发生。 */
+/** 合单策略的几组配置：高负载，让插入大量发生。 */
 const POOLED: [string, ConfigOverrides][] = [
-  ['三片区 顺路的一起送 哪座站都能送 快超时', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'deadline', zone: 'global', pool: 'any' } }],
-  ['三片区 同一家店的一起送 只由最近的站送 先下单', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'fifo', zone: 'strict', pool: 'same' } }],
-  ['三片区 顺路的一起送 等 10 秒再帮 来回快', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'roundtrip', zone: 'hybrid', pool: 'any' } }],
-  ['老街一座站 顺路的一起送 先下单', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { select: 'fifo', pool: 'any' } }],
-  ['三片区 同一家店的一起送 载量 3 某一片的先送', { ...CITY, peakRate: 82, capacity: 3, rules: { select: 'prioOffice', zone: 'global', pool: 'same' } }],
+  ['三片区 顺路合并 全站协同 快超时', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'deadline', zone: 'global', pool: 'any' } }],
+  ['三片区 同店合并 仅限最近站点 先到先送', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'fifo', zone: 'strict', pool: 'same' } }],
+  ['三片区 顺路合并 延迟支援 短程优先', { ...CITY, peakRate: 82, capacity: 2, rules: { select: 'roundtrip', zone: 'hybrid', pool: 'any' } }],
+  ['老街一座站 顺路合并 先到先送', { ...OPENING, drones: 4, peakRate: 24, capacity: 2, rules: { select: 'fifo', pool: 'any' } }],
+  ['三片区 同店合并 载量 3 {片区}优先', { ...CITY, peakRate: 82, capacity: 3, rules: { select: 'prioOffice', zone: 'global', pool: 'same' } }],
 ];
 
 /** 一架飞机路线上的订单编号（去重）。 */
@@ -620,7 +620,7 @@ describe.each(POOLED)('一起送：%s', (_name, config) => {
   });
 
   if (pool === 'same') {
-    it('同一家店的一起送：同一架飞机路线上的订单都取自同一家店', () => {
+    it('同店合并：同一架飞机路线上的订单都取自同一家店', () => {
       const state = createState({ ...config, seed: 45 });
       let multi = 0;
       const bad: string[] = [];
@@ -639,7 +639,7 @@ describe.each(POOLED)('一起送：%s', (_name, config) => {
   }
 
   if (zone === 'strict') {
-    it('只由最近的站送：被插入的订单也由离店最近的站出发的飞机送', () => {
+    it('仅限最近站点：被插入的订单也由离店最近的站出发的飞机送', () => {
       const state = runDays({ ...config, seed: 46 }, 2);
       const assigned = state.orders.filter((o) => o.tAssign >= 0);
       expect(assigned.length).toBeGreaterThan(300);
@@ -649,7 +649,7 @@ describe.each(POOLED)('一起送：%s', (_name, config) => {
     });
   }
 
-  it('先下单的先送：同一局面下，不论一起送和站点分工怎样，提前派出的数量恒为 0', () => {
+  it('先到先送：同一局面下，不论一起送和站点分工怎样，提前派出的数量恒为 0', () => {
     for (const seed of [42, 43, 44]) {
       const state = createState({ ...config, seed, orderEndStep: 2 * DAY_STEPS, rules: { ...(config.rules as object), select: 'fifo' } as ConfigOverrides['rules'] });
       let inserted = 0;
@@ -673,12 +673,12 @@ describe.each(POOLED)('一起送：%s', (_name, config) => {
   });
 });
 
-describe('一起送：先下单的先送下提前派出恒为 0', () => {
+describe('一起送：先到先送下提前派出恒为 0', () => {
   const zones = ['global', 'hybrid', 'strict'];
   const pools = ['single', 'same', 'any'];
   const matrix = zones.flatMap((zone) => pools.map((pool) => [zone, pool] as const));
 
-  it.each(matrix)('别的站帮不帮 %s，一趟送几单 %s：载量 2，高负载，整段运行里一张订单也不记为提前派出', (zone, pool) => {
+  it.each(matrix)('协同策略 %s，合单策略 %s：载量 2，高负载，整段运行里一张订单也不记为提前派出', (zone, pool) => {
     let overtaken = 0; // 较早的订单有飞机能接却没有派出，而更晚的订单派出了的轮数
     let inserted = 0;
     for (const seed of [42, 43, 44]) {
@@ -713,7 +713,7 @@ describe('一起送：先下单的先送下提前派出恒为 0', () => {
 });
 
 describe('一起送：别的卡下提前派出的统计也把一起送的限制算进名单', () => {
-  it('快超时的先送加顺路的一起送：有订单被记为提前派出，每条记录带着当时的卡，同一张订单只记一次', () => {
+  it('时限优先加顺路合并：有订单被记为提前派出，每条记录带着当时的卡，同一张订单只记一次', () => {
     const state = runDays({ ...CITY, peakRate: 82, capacity: 2, seed: 42, rules: { select: 'deadline', zone: 'global', pool: 'any' } }, 2);
     const early = state.stats.early;
     expect(early.length).toBeGreaterThan(20);

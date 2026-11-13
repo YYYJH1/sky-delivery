@@ -25,7 +25,7 @@ import type { Theme } from './look.ts';
 
 /**
  * 图集和动态纹理的分辨率：原大的两倍，设备像素比为 1 时由 Pixi 缩小，是 2×2 的均匀平均，边缘更平滑。
- * 整张地图放进窗口时画出来的东西比原大小得多，缩小的倍数不是整数，要开 mipmap 才不会闪。
+ * 镜头缩放比 1 小时画出来的东西比原大小得多，缩小的倍数不是整数，要开 mipmap 才不会闪。
  */
 export const TEXTURE_RESOLUTION = 2;
 export const SPIN_FRAMES = 6;
@@ -51,7 +51,8 @@ class Packer {
   constructor(size: number) {
     this.size = size;
     this.canvas = makeCanvas(size, size);
-    this.ctx = context2d(this.canvas);
+    // 图集画一次就上传，之后不再改，在内存里画，换状态重画时不卡在显卡上
+    this.ctx = context2d(this.canvas, true);
   }
 
   /** 排一格：逻辑尺寸 w 乘 h，原点（锚点）在格内的 (ox, oy)。draw 在以原点为 (0,0) 的局部坐标里画。返回这一格的序号。 */
@@ -212,7 +213,7 @@ function drawDigit(ctx: Ctx, theme: Theme, font: string, text: string): void {
 /** 一块独立的画布纹理，原点在 (ox, oy)。 */
 function standalone(w: number, h: number, ox: number, oy: number, draw: (ctx: Ctx) => void, mipmaps = false): Texture {
   const canvas = makeCanvas(w * TEXTURE_RESOLUTION, h * TEXTURE_RESOLUTION);
-  const ctx = context2d(canvas);
+  const ctx = context2d(canvas, true);
   ctx.setTransform(TEXTURE_RESOLUTION, 0, 0, TEXTURE_RESOLUTION, ox * TEXTURE_RESOLUTION, oy * TEXTURE_RESOLUTION);
   draw(ctx);
   const source = new CanvasSource({ resource: canvas, resolution: TEXTURE_RESOLUTION, scaleMode: 'linear', autoGenerateMipmaps: mipmaps });

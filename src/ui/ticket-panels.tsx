@@ -1,23 +1,38 @@
-// 高峰小结和日结的长小票。右侧，宽约 400，全部黑白，分隔用一行短横线，底部的操作是带下划线的文字。
-// 布局：标题居中，各片区一行是片区名、准时率、比昨天、十格的条，
-// 四段时间下面有一条四种密度拼成的横杠，说明点名的那一段画圈。调度台开放之后，小票停在白板的左边，不盖住它。
+// 高峰小结和日结的长小票。右侧，宽约 400，点阵字，全部黑白，下沿锯齿，分隔用一行短横线，底部的操作是带下划线的文字。
+// 布局：标题居中，各片区一行是片区名、准时率、十格的条、达标，目标写在下面一行的小字里，数后面可以有纪录的小字，
+// 四段时间下面有一条四种密度拼成的横杠，说明点名的那一段用手画的红圈圈起来，再下面是与开局策略的对照。
+// 调度台开放之后，小票停在白板的左边，不盖住它。
 // 高峰小结生成时从右侧送出，只露出标题和时段，不打断游戏。点一下展开并暂停，「继续」恢复，十几秒不点就收起，
 // 收起之后右边缘留一个小标签，日结出现之前都可以再点开。日结一出现就展开，游戏照常走，点「继续」收起。
 // 部件只读 state.ts 里的界面数据，点击交给 actions。
+import { MarkCircle, Sheet } from './sheets.tsx';
 import { actions, boardOpen, dayEndOpen, summaryPhase } from './state.ts';
-import type { SegmentItem, SummaryDistrictLine, TicketRow } from './tickets.ts';
+import type { CompareBlock, RecordNote, SegmentItem, SummaryDistrictLine, TicketRow } from './tickets.ts';
 import type { UiData } from './view-model.ts';
 
+/** 有一行带纪录的小字时，所有行都留出放它的一列，数还是对齐的。 */
 function Rows({ rows }: { rows: readonly TicketRow[] }) {
+  const withRecord = rows.some((r) => r.record !== null);
   return (
     <>
       {rows.map((r) => (
-        <div key={r.label} class={r.indent ? 'trow indent' : 'trow'}>
+        <div key={r.label} class={`trow${r.indent ? ' indent' : ''}${withRecord ? ' rec' : ''}`}>
           <span>{r.label}</span>
           <span class="tval">{r.value}</span>
+          {withRecord ? <RecordText note={r.record} /> : null}
         </div>
       ))}
     </>
+  );
+}
+
+/** 数后面的纪录。新破的纪录加下划线。 */
+function RecordText({ note }: { note: RecordNote | null }) {
+  if (note === null) return <span class="record" />;
+  return (
+    <span class={note.fresh ? 'record fresh' : 'record'} data-part={note.fresh ? 'record-new' : 'record-best'}>
+      {note.text}
+    </span>
   );
 }
 
@@ -25,29 +40,59 @@ function Sep() {
   return <div class="sep" />;
 }
 
-function DistrictLines({ lines, withDelta }: { lines: readonly SummaryDistrictLine[]; withDelta: boolean }) {
+function DistrictLines({ lines, part }: { lines: readonly SummaryDistrictLine[]; part: string }) {
   return (
     <>
-      {lines.map((line) => (
-        <div key={line.name} class={withDelta ? 'drow' : 'drow no-delta'} data-part={`summary-district-${line.name}`}>
-          <span class="dname">{line.name}</span>
-          {line.noOrders ? (
-            // 这一场没有订单：只写「没有订单」，没有比昨天，也没有十格的条
-            <span class="dpct none">{line.pct}</span>
-          ) : (
-            <>
-              <span class="dpct">{line.pct}</span>
-              {withDelta ? <span class="ddelta">{line.delta}</span> : null}
-              <span class="dbar">{line.bar}</span>
-            </>
-          )}
+      {lines.map((line, i) => (
+        <div key={line.name} class="dblock" data-part={`${part}-${line.name}`}>
+          <div class="drow">
+            <span class="dname">{line.name}</span>
+            {line.noOrders ? (
+              // 这一场没有订单：只写「无订单」，没有十格的条，也没有目标
+              <span class="dpct none">{line.pct}</span>
+            ) : (
+              <>
+                <span class="dpct">{line.pct}</span>
+                <span class="dbar">{line.bar}</span>
+                {line.mark === null ? (
+                  <span class="dmark" />
+                ) : (
+                  <span class={line.mark.met ? 'dmark met' : 'dmark missed'}>
+                    {line.mark.text}
+                    {line.mark.met ? null : <MarkCircle red seed={100 + i} />}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+          {line.goal === null ? null : <div class="dgoal">{line.goal}</div>}
         </div>
       ))}
     </>
   );
 }
 
-/** 四段时间拼成的横杠：等飞机实心，等起降竖线密，等出餐竖线疏，路上是点。宽度按百分数分。 */
+/** 与开局策略的对照：开局策略下的结果，比它多准时或少准时几单，各片区一行。 */
+function Compare({ block }: { block: CompareBlock }) {
+  return (
+    <div data-part="summary-compare">
+      <div class="early-name">{block.header}</div>
+      <div class="dgoal">{block.cards}</div>
+      <div>{block.row}</div>
+      <div class="gain-row">
+        <span data-part="summary-gain">{block.gain}</span>
+        {block.record === null ? null : (
+          <span class={block.record.fresh ? 'record fresh' : 'record'} data-part={block.record.fresh ? 'record-new' : 'record-best'}>
+            {block.record.text}
+          </span>
+        )}
+      </div>
+      <DistrictLines lines={block.districts} part="compare-district" />
+    </div>
+  );
+}
+
+/** 四段时间拼成的横杠：等无人机实心，起降排队竖线密，等出餐竖线疏，在途是点。宽度按百分数分。 */
 const BAR_WIDTH = 356;
 const BAR_HEIGHT = 12;
 
@@ -89,6 +134,7 @@ function Segments({ items }: { items: readonly SegmentItem[] }) {
         {items.map((item) => (
           <span key={item.id} class={item.longest ? 'seg longest' : 'seg'} data-part={`segment-${item.id}`}>
             {item.text}
+            {item.longest ? <MarkCircle red seed={110} /> : null}
           </span>
         ))}
       </div>
@@ -107,25 +153,32 @@ export function SummaryTicket({ d }: { d: UiData }) {
     // 白板展开时，小标签挪到白板的左边，免得压在白板的标题栏上
     return (
       <div class="corner rt">
-        <div class={boardOpen.value ? 'block ticket-tab shifted' : 'block ticket-tab'} data-part="summary-tab" onClick={() => actions.clickSummary()}>
+        <Sheet
+          kind="slip"
+          seed={63}
+          depth={4}
+          class={boardOpen.value ? 'block slip ticket-tab shifted' : 'block slip ticket-tab'}
+          part="summary-tab"
+          onClick={() => actions.clickSummary()}
+        >
           {s.title}
-        </div>
+        </Sheet>
       </div>
     );
   }
   if (phase === 'peek') {
     return (
       <div class="corner rt">
-        <div class="block ticket-peek" data-part="summary-peek" onClick={() => actions.clickSummary()}>
+        <Sheet kind="slip" seed={62} depth={4} class="block slip ticket-peek" part="summary-peek" onClick={() => actions.clickSummary()}>
           <div class="ticket-title">{s.title}</div>
           <div class="ticket-sub">{s.period}</div>
-        </div>
+        </Sheet>
       </div>
     );
   }
   return (
     <div class={beside ? 'corner rt beside' : 'corner rt'}>
-      <div class="block long-ticket" data-part="summary">
+      <Sheet kind="slip" seed={61} depth={5} class="block slip long-ticket" part="summary">
         <div class="ticket-title" data-part="summary-title">
           {s.title}
         </div>
@@ -133,11 +186,21 @@ export function SummaryTicket({ d }: { d: UiData }) {
         <Sep />
         <Rows rows={s.rows} />
         <Sep />
-        <div class="thead">
-          <span>{s.districtHeader}</span>
-          {s.deltaHeader === null ? null : <span class="dh" data-part="summary-delta-header">{s.deltaHeader}</span>}
-        </div>
-        <DistrictLines lines={s.districts} withDelta={s.deltaHeader !== null} />
+        <div class="thead plain">{s.districtHeader}</div>
+        <DistrictLines lines={s.districts} part="summary-district" />
+        {s.cleared === null ? null : (
+          <div class="stamp" data-part="summary-cleared">
+            <span class="stamp-text">
+              {s.cleared}
+              <MarkCircle seed={120} />
+            </span>
+          </div>
+        )}
+        {s.streak === null ? null : (
+          <div class="dgoal" data-part="summary-streak">
+            {s.streak}
+          </div>
+        )}
         {s.segments === null ? null : (
           <>
             <Sep />
@@ -145,15 +208,10 @@ export function SummaryTicket({ d }: { d: UiData }) {
             <Segments items={s.segments} />
           </>
         )}
-        {s.early === null ? null : (
+        {s.compare === null ? null : (
           <>
             <Sep />
-            <div data-part="summary-early">
-              {s.early.name === null ? null : <div class="early-name">{s.early.name}</div>}
-              {s.early.lines.map((line) => (
-                <div key={line}>{line}</div>
-              ))}
-            </div>
+            <Compare block={s.compare} />
           </>
         )}
         <Sep />
@@ -172,7 +230,7 @@ export function SummaryTicket({ d }: { d: UiData }) {
             {s.next}
           </span>
         </div>
-      </div>
+      </Sheet>
     </div>
   );
 }
@@ -182,7 +240,7 @@ export function DayEndTicket({ d }: { d: UiData }) {
   if (!dayEndOpen.value || e === null) return null;
   return (
     <div class={d.board !== null ? 'corner rt beside' : 'corner rt'}>
-      <div class="block long-ticket" data-part="dayend">
+      <Sheet kind="slip" seed={61} depth={5} class="block slip long-ticket" part="dayend">
         <div class="ticket-title" data-part="dayend-title">
           {e.title}
         </div>
@@ -195,12 +253,22 @@ export function DayEndTicket({ d }: { d: UiData }) {
             <div key={line}>{line}</div>
           ))}
         </div>
+        {e.metrics.length === 0 ? null : (
+          <>
+            <Sep />
+            <div class="sentences" data-part="dayend-metrics">
+              {e.metrics.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </div>
+          </>
+        )}
         <div class="actions">
           <span class="link" data-part="dayend-continue" onClick={() => actions.clickDayEndContinue()}>
             {e.next}
           </span>
         </div>
-      </div>
+      </Sheet>
     </div>
   );
 }

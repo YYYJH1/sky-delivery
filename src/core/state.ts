@@ -1,4 +1,4 @@
-// 创建状态，以及玩家对状态的两类操作：换规矩卡、点击订单插队。
+// 创建状态，以及玩家对状态的两类操作：换策略卡、点击订单插队。
 // 经营模式里玩家的其他操作（建站、购买、退回等）是命令，见 campaign/commands.ts。
 import { createCampaignState } from './campaign/create.ts';
 import { ruleSetInForce } from './campaign/rulesets.ts';
@@ -60,7 +60,7 @@ export function createState(overrides: ConfigOverrides = {}, prebuiltWorld?: Wor
 }
 
 /**
- * 换规矩卡，立即生效，并记下换卡的时刻。取值不合法时整体不生效。
+ * 换策略卡，立即生效，并记下换卡的时刻。取值不合法时整体不生效。
  * 经营模式开通写字楼区之后分成午晚两套（campaign.ruleSets 不是 null），state.rules 是现在生效的那一套。
  * peak 指定改哪一套，不指定就改现在生效的那一套：
  * - 改现在生效的那一套：立即生效，照常记换卡，同时记进这一套的保存。

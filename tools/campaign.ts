@@ -23,9 +23,9 @@ const HELP = `用法：npm run campaign -- [选项]
   --seeds <列表>        订单种子，如 42-51 或 42,43（默认 42）
   --commands <路径>     命令表（JSON），在指定的步执行命令
   --click-delay <步>    开局订单出现之后，脚本隔多少步点击它（默认 10，即 1 秒）
-  --select <规则>       开局的「先送哪张单」（默认沿用配置）
-  --zone <规则>         开局的「别的站帮不帮」
-  --pool <规则>         开局的「一趟送几单」
+  --select <规则>       开局的「调度策略」（默认沿用配置）
+  --zone <规则>         开局的「协同策略」
+  --pool <规则>         开局的「合单策略」
   --json <路径>         把全部结果写成 JSON 文件
   --quiet               只打印汇总表，不打印每个种子的逐日表
   --help                显示本说明
@@ -89,7 +89,7 @@ export interface CommandLog {
 /** 一个游戏日结束时的情况。day 从 1 数起，数据取自这一天的日结和这一天里发生的事。 */
 export interface DayReport {
   day: number;
-  /** 日结之后各开通的片区：星级，最近两天有结果的订单里的准时率和退单率（下取整的百分数，没有订单为 null），日结里这一行的写法 */
+  /** 日结之后各开通的片区：星级，最近两天完成的订单里的准时率和退单率（下取整的百分数，没有订单为 null），日结里这一行的写法 */
   districts: { district: number; star: number; n: number; onTimePct: number | null; cancelPct: number | null; kind: string }[];
   /** 这一天开放的东西和开放的步。日结在第二天的第 0 步做，归在它结束的那一天 */
   unlocked: { key: string; step: number }[];
@@ -299,7 +299,7 @@ function dayCells(r: DayRow): string[] {
 
 /** 每天的日结、开放、便签和小结，一天几行。 */
 function reportLines(run: SeedRun): string[] {
-  const lines: string[] = ['日结之后（片区的星级，最近两天有结果的订单里的准时率和退单率）'];
+  const lines: string[] = ['日结之后（片区的星级，最近两天完成的订单里的准时率和退单率）'];
   const shown = (n: number | null): string => (n === null ? '-' : `${n}%`);
   for (const r of run.report) {
     const districts = r.districts.map((d) => `${DISTRICT_LABEL[d.district] ?? `片区${d.district}`} ${d.star}星 准时 ${shown(d.onTimePct)} 退单 ${shown(d.cancelPct)}（${d.n} 单，${d.kind}）`);
