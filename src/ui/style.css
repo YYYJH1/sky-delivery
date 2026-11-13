@@ -1,0 +1,850 @@
+/* 游戏页面的样式。界面是直角，纸白底，蓝黑细边，没有纸纹、毛边、阴影和动画。
+   颜色取自色表（src/content/palette.ts）。界面物件按 1920×1080 的尺寸写，--s 是窗口的缩放，由 game.ts 设置。
+   四个角和上下正中的物件各自从自己的角落缩放，窗口不是 16:9 时物件也贴着窗口的边。 */
+:root {
+  --paper: #f3f2ec;
+  --street: #e3e2db;
+  --ink: #22304a;
+  --ticket: #fbfbf7;
+  --thermal: #2a2a2e;
+  --board: #fcfcfa;
+  --frame: #9aa3ab;
+  --note: #f4e27a;
+  --urgent: #d8342a;
+  --faint: rgba(34, 48, 74, 0.35);
+  --font: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font: 22px/1.45 var(--font);
+}
+
+/* 窗口比 1280×720 小时，页面出滚动条，不再缩小 */
+body {
+  overflow: auto;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  min-width: 1280px;
+  min-height: 720px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --s: 1;
+}
+
+.corner,
+.menu-corner {
+  position: absolute;
+  pointer-events: none;
+}
+
+.corner > *,
+.menu-corner > * {
+  pointer-events: auto;
+}
+
+.tl {
+  left: 0;
+  top: 0;
+  padding: 20px 0 0 24px;
+  transform-origin: 0 0;
+  transform: scale(var(--s));
+}
+
+.tr {
+  right: 0;
+  top: 0;
+  padding: 20px 24px 0 0;
+  transform-origin: 100% 0;
+  transform: scale(var(--s));
+}
+
+.bl {
+  left: 0;
+  bottom: 0;
+  padding: 0 0 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  transform-origin: 0 100%;
+  transform: scale(var(--s));
+}
+
+.tc {
+  left: 50%;
+  top: 0;
+  padding-top: 20px;
+  transform-origin: 50% 0;
+  transform: translateX(-50%) scale(var(--s));
+}
+
+.bc {
+  left: 50%;
+  bottom: 0;
+  padding-bottom: 112px;
+  transform-origin: 50% 100%;
+  transform: translateX(-50%) scale(var(--s));
+}
+
+.menu-corner {
+  right: 0;
+  top: 0;
+  padding: 82px 24px 0 0;
+  transform-origin: 100% 0;
+  transform: scale(var(--s));
+}
+
+/* 底部：片区纸条贴在价签右边（价签最宽约 650），一行，系统提示在它上面 */
+.bn {
+  left: calc(670px * var(--s));
+  bottom: 0;
+  width: max-content;
+  max-width: 1150px;
+  padding-bottom: 24px;
+  transform-origin: 0 100%;
+  transform: scale(var(--s));
+}
+
+/* 右侧：调度台。收起时在 300，展开时顶边抬到 110（展开的白板顶在速度纸条下面），高度够放九张卡和选片区 */
+.rm {
+  right: 0;
+  top: calc(300px * var(--s));
+  padding-right: 24px;
+  transform-origin: 100% 0;
+  transform: scale(var(--s));
+}
+
+.rm.open {
+  top: calc(110px * var(--s));
+}
+
+/* 右侧：高峰小结和日结的长小票。调度台开放之后停在白板的左边（beside） */
+.rt {
+  right: 0;
+  top: 0;
+  padding: 96px 24px 0 0;
+  transform-origin: 100% 0;
+  transform: scale(var(--s));
+}
+
+.rt.beside {
+  padding-right: 250px;
+}
+
+/* 屏幕中间偏上：结局 */
+.mc {
+  left: 50%;
+  top: 34%;
+  transform-origin: 50% 50%;
+  transform: translate(-50%, -50%) scale(var(--s));
+}
+
+.block {
+  box-sizing: border-box;
+}
+
+.paper {
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+}
+
+/* 小票：小票白，热敏黑 */
+.receipt {
+  background: var(--ticket);
+  border: 1.5px solid var(--ink);
+  color: var(--thermal);
+  padding: 12px 22px;
+  font-size: 26px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 日程纸条 */
+.schedule {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 8px 20px 6px;
+}
+
+.clock {
+  min-width: 170px;
+  font-size: 24px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ruler {
+  display: block;
+}
+
+.hatch-line {
+  stroke: var(--ink);
+  stroke-width: 1.3;
+}
+
+.band {
+  fill: url(#peak-hatch);
+  stroke: var(--ink);
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+.band.on {
+  opacity: 1;
+}
+
+.band-name {
+  font-size: 14px;
+  fill: var(--ink);
+}
+
+.tick-name {
+  font-size: 13px;
+  fill: var(--ink);
+}
+
+.ruler-line {
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+
+.now-line {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.now-mark {
+  fill: var(--ink);
+}
+
+/* 速度纸条：文字就是按钮，当前的一项下面画一道线 */
+.speed {
+  display: flex;
+  gap: 24px;
+  padding: 10px 22px;
+  font-size: 22px;
+  white-space: nowrap;
+}
+
+.word {
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.word.on {
+  border-bottom-color: var(--ink);
+}
+
+/* 价签 */
+.tags {
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.tag {
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 10px 20px;
+  font-size: 22px;
+  white-space: nowrap;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag.dim {
+  color: var(--faint);
+}
+
+.tag.on {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
+}
+
+/* 改装面板 */
+.upgrades {
+  min-width: 600px;
+  padding: 6px 0;
+}
+
+.upgrade {
+  padding: 8px 20px;
+  cursor: pointer;
+}
+
+.upgrade + .upgrade {
+  border-top: 1px solid var(--faint);
+}
+
+.upgrade-name {
+  font-size: 22px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+
+.upgrade-line {
+  font-size: 18px;
+}
+
+.upgrade.quiet {
+  opacity: 0.6;
+}
+
+.upgrade.dim {
+  opacity: 0.35;
+}
+
+/* 站点小卡 */
+.card {
+  position: absolute;
+  width: 270px;
+  padding: 12px 16px 14px;
+  font-size: 19px;
+  transform-origin: 0 0;
+  pointer-events: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-title {
+  margin-bottom: 4px;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.refund {
+  margin-top: 8px;
+  text-wrap: balance;
+  word-break: keep-all; /* 中文只在标点和空格处折行，不把「今天能退」拆开 */
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+/* 地图上：选屋顶时候选屋顶旁边的文字，鼠标停在小票上的提示。不挡鼠标，位置和字号由 game.ts 给 */
+.roof-label,
+.map-tooltip {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  line-height: 1.4;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.roof-label {
+  padding: 5px 7px;
+}
+
+.roof-label.dim {
+  opacity: 0.6;
+}
+
+.map-tooltip {
+  padding: 5px 8px;
+}
+
+/* 系统提示 */
+.toast {
+  padding: 10px 24px;
+  max-width: 1000px;
+  font-size: 22px;
+  text-align: center;
+}
+
+/* 菜单 */
+.menu {
+  min-width: 210px;
+  padding: 6px 0;
+}
+
+.menu-item {
+  padding: 8px 24px;
+  font-size: 22px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu-item.dim {
+  color: var(--faint);
+  cursor: default;
+}
+
+.export-code {
+  display: block;
+  box-sizing: border-box;
+  width: 330px;
+  height: 110px;
+  margin: 8px 12px 8px;
+  padding: 4px;
+  border: 1px solid var(--ink);
+  background: var(--ticket);
+  color: var(--thermal);
+  font: 12px/1.3 monospace;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 同一个浏览器里已经有别的页面在运行 */
+.blocked {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.blocked .toast {
+  font-size: 30px;
+  padding: 18px 36px;
+  transform: scale(var(--s));
+  pointer-events: auto;
+}
+
+/* 片区纸条：片区名，星，升星的条件和当前值，一行 */
+.note {
+  box-sizing: border-box;
+  max-width: 1150px;
+  padding: 9px 22px;
+  font-size: 19px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-name {
+  font-size: 23px;
+  font-weight: bold;
+}
+
+.note-name.switch {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+.stars {
+  margin-left: 8px;
+  font-size: 21px;
+  letter-spacing: 2px;
+}
+
+/* 地图上还没开通的片区：开通价签摆在片区中间 */
+.open-tag {
+  position: absolute;
+  transform-origin: 50% 50%;
+  pointer-events: auto;
+}
+
+/* 便签：贴在日程纸条右端的下面，略微倾斜 */
+.tip {
+  position: absolute;
+  right: 80px;
+  top: 100%;
+  width: 300px;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 10px 16px 12px;
+  background: var(--note);
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.4;
+  text-wrap: balance;
+  cursor: pointer;
+  transform-origin: 100% 0;
+  transform: rotate(1.6deg);
+}
+
+/* 结局 */
+.ending {
+  max-width: 560px;
+  padding: 16px 32px;
+  font-size: 25px;
+  line-height: 1.5;
+  text-wrap: balance;
+  text-align: center;
+  cursor: pointer;
+}
+
+/* 调度台：白板白，铝框灰的边 */
+.board {
+  background: var(--board);
+  border: 6px solid var(--frame);
+  color: var(--ink);
+}
+
+.board.collapsed {
+  width: 200px;
+  padding: 10px 14px 12px;
+  cursor: pointer;
+}
+
+.board.expanded {
+  width: 480px;
+  padding: 8px 18px 0;
+}
+
+.board-title {
+  font-size: 26px;
+  font-weight: bold;
+  line-height: 1.45;
+}
+
+.board-title.clickable {
+  cursor: pointer;
+}
+
+.board-sub {
+  margin-bottom: 6px;
+  font-size: 15px;
+  opacity: 0.65;
+}
+
+/* 收起时当前选中的卡，一张一条蓝黑的磁贴 */
+.board-picked {
+  margin-top: 4px;
+  padding: 2px 10px;
+  background: var(--ink);
+  color: var(--board);
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+/* 展开时标题在左，两套规矩的页签在右 */
+.board-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.board-tabs {
+  display: flex;
+  gap: 22px;
+  font-size: 21px;
+}
+
+.board-col-title {
+  display: inline-block;
+  margin: 8px 0 6px;
+  border-bottom: 1.5px solid var(--ink);
+  font-size: 20px;
+  font-weight: bold;
+  line-height: 1.3;
+}
+
+/* 每栏的磁贴排成两列 */
+.cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 8px;
+}
+
+.magnet-wrap {
+  min-width: 0;
+}
+
+.magnet-wrap.wide,
+.picker {
+  grid-column: 1 / -1;
+}
+
+/* 磁贴：选中的蓝黑实心，没选中的白底细边，没开放的虚线边 */
+.magnet {
+  position: relative;
+  box-sizing: border-box;
+  padding: 3px 10px 4px;
+  border: 1.5px solid var(--ink);
+  background: var(--board);
+  cursor: pointer;
+}
+
+.magnet.on {
+  background: var(--ink);
+  color: var(--board);
+}
+
+.magnet.locked {
+  border: 1.5px dashed var(--faint);
+  color: rgba(34, 48, 74, 0.55);
+  cursor: default;
+}
+
+.magnet.block-lock {
+  padding: 8px 12px;
+  color: rgba(34, 48, 74, 0.8);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.magnet-name {
+  font-size: 19px;
+  font-weight: bold;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.magnet-desc {
+  padding-top: 1px;
+  font-size: 14px;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.magnet-desc.locked {
+  color: rgba(34, 48, 74, 0.8);
+}
+
+/* 代价：悬停时出现在白板左边，不占白板里的位置。右列的磁贴要多跨过左列和空隙 */
+.magnet-cost {
+  display: none;
+  position: absolute;
+  top: 0;
+  right: calc(100% + 16px);
+  box-sizing: border-box;
+  width: 270px;
+  padding: 8px 14px;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: normal;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.magnet-cost.right {
+  right: calc(200% + 48px);
+}
+
+.magnet:hover .magnet-cost {
+  display: block;
+}
+
+/* 选「某一片的先送」时，在这一栏里多出一行：提示和已开通的片区 */
+.picker {
+  padding: 6px 12px 8px;
+  border-left: 3px solid var(--ink);
+}
+
+.picker-prompt {
+  font-size: 15px;
+}
+
+.picker-choices {
+  display: flex;
+  gap: 22px;
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+/* 白板底部的小票条 */
+.board-ticket {
+  margin: 12px -18px 0;
+  padding: 8px 18px;
+  background: var(--ticket);
+  border-top: 1.5px solid var(--ink);
+  color: var(--thermal);
+  font-size: 17px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 长小票：高峰小结和日结 */
+.long-ticket {
+  width: 400px;
+  padding: 16px 22px 14px;
+  background: var(--ticket);
+  border: 1.5px solid var(--ink);
+  color: var(--thermal);
+  font-size: 19px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-title {
+  font-size: 26px;
+  font-weight: bold;
+  line-height: 1.35;
+}
+
+.long-ticket .ticket-title {
+  text-align: center;
+}
+
+.ticket-sub {
+  font-size: 18px;
+}
+
+.sep {
+  margin: 9px 0;
+  border-top: 1.5px dashed var(--thermal);
+}
+
+.trow {
+  display: flex;
+  justify-content: space-between;
+}
+
+.trow.indent {
+  padding-left: 22px;
+}
+
+.thead {
+  display: grid;
+  grid-template-columns: 5em 1fr;
+  margin-bottom: 2px;
+  font-size: 17px;
+}
+
+.thead .dh {
+  padding-left: 3.4em;
+}
+
+.thead.plain {
+  display: block;
+}
+
+.drow {
+  display: grid;
+  grid-template-columns: 5em 3.3em 3.1em 1fr;
+  align-items: baseline;
+  column-gap: 4px;
+}
+
+.drow.no-delta {
+  grid-template-columns: 5em 3.3em 1fr;
+}
+
+.dpct,
+.ddelta {
+  text-align: right;
+}
+
+/* 这一场这个片区没有订单：「没有订单」从准时率那一列起占满一行的其余部分，靠左 */
+.dpct.none {
+  grid-column: 2 / -1;
+  text-align: left;
+}
+
+.dbar {
+  padding-left: 8px;
+  font-size: 12px;
+  letter-spacing: -1px;
+  white-space: nowrap;
+}
+
+.segs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+}
+
+.seg {
+  justify-self: start;
+  padding: 0 10px;
+  margin-left: -10px;
+}
+
+/* 说明里点名的那一段：急红的圈 */
+.seg.longest {
+  padding: 2px 12px;
+  margin: -2px 0 -2px -12px;
+  border: 2px solid var(--urgent);
+  border-radius: 50%;
+}
+
+.segbar {
+  display: block;
+  margin-top: 5px;
+}
+
+.segbar .ink {
+  fill: var(--thermal);
+}
+
+.segbar .frame {
+  fill: none;
+  stroke: var(--thermal);
+  stroke-width: 1;
+}
+
+.early-name {
+  font-weight: bold;
+}
+
+.actions {
+  display: flex;
+  gap: 40px;
+  margin-top: 12px;
+}
+
+.link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+/* 刚送出的小结：露出标题和时段，从右边滑进来 */
+.ticket-peek {
+  width: 300px;
+  padding: 10px 18px 12px;
+  background: var(--ticket);
+  border: 1.5px solid var(--ink);
+  color: var(--thermal);
+  cursor: pointer;
+  animation: ticket-in 0.6s ease-out;
+}
+
+/* 收起之后右边缘留的小标签 */
+.ticket-tab {
+  margin-right: -24px;
+  padding: 6px 16px;
+  background: var(--ticket);
+  border: 1.5px solid var(--ink);
+  border-right: none;
+  color: var(--thermal);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ticket-tab.shifted {
+  margin-right: 492px;
+  border-right: 1.5px solid var(--ink);
+}
+
+@keyframes ticket-in {
+  from {
+    transform: translateX(120%);
+  }
+  to {
+    transform: none;
+  }
+}

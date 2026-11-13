@@ -1,0 +1,59 @@
+name: Pages
+
+# Builds the web client and publishes it to GitHub Pages at https://yyyjh1.github.io/sky-delivery/. It runs on
+# every push to main and when someone starts it, and only in YYYJH1/sky-delivery, so that a fork does not try to
+# deploy. The repository's Pages setting must be "GitHub Actions" (Settings, Pages, Build and deployment,
+# Source).
+#
+# The site is served from a sub-path. vite.config.ts sets base to './', so the page loads its scripts, styles and
+# fonts by relative paths and works under /sky-delivery/. Type check, tests and build must all pass before the
+# deploy job starts.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Nothing is granted by default. Each job asks for what it needs.
+permissions: {}
+
+# One deployment at a time. A deployment that is running is allowed to finish and the newest waiting one follows.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: type check, test and build (Node 22)
+    if: ${{ github.repository == 'YYYJH1/sky-delivery' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    if: ${{ github.repository == 'YYYJH1/sky-delivery' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

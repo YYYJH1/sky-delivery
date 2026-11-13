@@ -1,0 +1,32 @@
+/* 游戏附带的四种字体，都是只含游戏用到的字的子集，来源和许可证见 SOURCES.md。 */
+@font-face {
+  font-family: 'SkySerif';
+  src: url('./sky-serif-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'SkyPixel';
+  src: url('./sky-pixel.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'SkyHand';
+  src: url('./sky-hand.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'SkySans';
+  src: url('./sky-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: block;
+}
