@@ -5,7 +5,7 @@ import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { bayPrice, dronePrice, gatePrice, hashState, quoteCommand, stationBasePrice, stationCount, stationPrice } from '../src/core/index.ts';
 import { candidateRoofs } from '../src/ui/roofs.ts';
-import { buildTag, doubleBoxItem, gateItem, nearbyLandingItem, stationTags, tagFromQuote } from '../src/ui/tags.ts';
+import { buildTag, doubleBoxItem, gateItem, gateRows, nearbyLandingItem, stationTags, tagFromQuote } from '../src/ui/tags.ts';
 import { campaignOf, campaignState as lockedState, must, quietState, unlockAll, withMoney } from './campaign-helpers.ts';
 
 /** 这个文件里的测试都要能买东西，所以开局先把价签、双层货箱这些开放项全部打开。开放条件本身的测试在 ui-unlocks.test.ts。 */
@@ -135,17 +135,68 @@ describe('改装列表', () => {
     expect(doubleBoxItem(state)).toEqual({ key: 'doubleBox', price, note: 'owned', dim: false, click: { kind: 'hint', hint: 'alreadyOwned' } });
   });
 
-  it('就近降落：只有一座站时没开放，提示要有第二座站；有了第二座站才能买，买了标为已经买过', () => {
+  it('就近降落：只有一座站时没开放，提示要有第二座站；有了第二座站才能买，买之前不是开关', () => {
     const price = ECONOMY_V1.nearestLandingPrice;
     const state = withMoney(campaignState(), 10_000);
     expect(nearbyLandingItem(state)).toEqual({ key: 'nearbyLanding', price, note: 'locked', dim: false, click: { kind: 'hint', hint: 'needTwoStations' } });
     must(state, { type: 'buildStation', roof: 1 });
-    expect(nearbyLandingItem(state)).toMatchObject({ price, note: 'desc', dim: false });
+    expect(nearbyLandingItem(state)).toEqual({ key: 'nearbyLanding', price, note: 'desc', dim: false, click: { kind: 'run', command: { type: 'buyNearestLanding' } } });
     withMoney(state, price - 1);
     expect(nearbyLandingItem(state)).toMatchObject({ note: 'desc', dim: true });
-    withMoney(state, 10_000);
+  });
+
+  it('就近降落买下之后变成开关：开着，点击发出关闭的命令，成功之后的系统提示是已关闭', () => {
+    const price = ECONOMY_V1.nearestLandingPrice;
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'buildStation', roof: 1 });
     must(state, { type: 'buyNearestLanding' });
-    expect(nearbyLandingItem(state)).toMatchObject({ note: 'owned', click: { kind: 'hint', hint: 'alreadyOwned' } });
+    expect(state.returnRule).toBe('nearest');
+    expect(nearbyLandingItem(state)).toEqual({
+      key: 'nearbyLanding',
+      price,
+      note: 'toggle',
+      dim: false,
+      on: true,
+      click: { kind: 'run', command: { type: 'setNearestLanding', on: false }, done: '就近降落已关闭。' },
+    });
+  });
+
+  it('开关免费，来回切换：关着时点击发出开启的命令，成功之后的系统提示是已开启，仍记着已买下', () => {
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'buildStation', roof: 1 });
+    must(state, { type: 'buyNearestLanding' });
+    const money = campaignOf(state).money;
+    expect(quoteCommand(state, { type: 'setNearestLanding', on: false })).toEqual({ ok: true, reason: null, kind: 'free', price: 0 });
+    must(state, { type: 'setNearestLanding', on: false });
+    expect(state.returnRule).toBe('home');
+    expect(campaignOf(state).nearestOwned).toBe(true);
+    expect(campaignOf(state).money).toBe(money);
+    expect(nearbyLandingItem(state)).toMatchObject({ note: 'toggle', on: false, click: { kind: 'run', command: { type: 'setNearestLanding', on: true }, done: '就近降落已开启。' } });
+    must(state, { type: 'setNearestLanding', on: true });
+    expect(state.returnRule).toBe('nearest');
+    expect(nearbyLandingItem(state)).toMatchObject({ note: 'toggle', on: true });
+  });
+
+  it('开关和余额无关：没钱也是开关，文字不变淡，关着时再点「购买」不会重复收费（核心报已购买）', () => {
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'buildStation', roof: 1 });
+    must(state, { type: 'buyNearestLanding' });
+    must(state, { type: 'setNearestLanding', on: false });
+    withMoney(state, 0);
+    expect(nearbyLandingItem(state)).toMatchObject({ note: 'toggle', dim: false, on: false });
+    expect(quoteCommand(state, { type: 'buyNearestLanding' })).toMatchObject({ ok: false, reason: 'alreadyOwned' });
+  });
+
+  it('没买下就近降落时开关不可用：核心拒绝，原因是 ruleLocked', () => {
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'buildStation', roof: 1 });
+    expect(quoteCommand(state, { type: 'setNearestLanding', on: true })).toMatchObject({ ok: false, reason: 'ruleLocked' });
+    expect(nearbyLandingItem(state).note).toBe('desc');
+  });
+
+  it('开局的配置里就近降落已经开着：从一开始就是开关，哪怕只有一座站', () => {
+    const state = withMoney(unlockAll(lockedState({ returnRule: 'nearest' })), 0);
+    expect(nearbyLandingItem(state)).toMatchObject({ note: 'toggle', on: true });
   });
 
   it('没选中站点时起降口一行列 2 级，点击提示先选一座站', () => {
@@ -164,6 +215,59 @@ describe('改装列表', () => {
     expect(gateItem(state, 0)).toEqual({ key: 'gate3', price: gatePrice(3), note: 'owned', dim: false, click: { kind: 'hint', hint: 'alreadyOwned' } });
   });
 
+  it('改装单里起降口的两行：没选站点时都写请先选择站点，价格是 2 级和 3 级的，余额不够变淡', () => {
+    const state = campaignState();
+    const [second, third] = gateRows(state, null);
+    expect(second).toEqual({ key: 'gate2', price: gatePrice(2), note: 'needStation', dim: true, click: { kind: 'hint', hint: 'noStationSelected' } });
+    expect(third).toEqual({ key: 'gate3', price: gatePrice(3), note: 'needStation', dim: true, click: { kind: 'hint', hint: 'noStationSelected' } });
+    withMoney(state, gatePrice(2));
+    expect(gateRows(state, null).map((g) => g.dim)).toEqual([false, true]);
+    withMoney(state, gatePrice(3));
+    expect(gateRows(state, null).map((g) => g.dim)).toEqual([false, false]);
+  });
+
+  it('改装单里起降口的两行：选中一座一级站，2 级能买，3 级写需要先升级至 2 级，不能点', () => {
+    const state = withMoney(campaignState(), 10_000);
+    const [second, third] = gateRows(state, 0);
+    expect(second).toEqual({ key: 'gate2', price: gatePrice(2), note: 'desc', dim: false, click: { kind: 'run', command: { type: 'upgradeGate', station: 0 } } });
+    expect(third).toEqual({ key: 'gate3', price: gatePrice(3), note: 'locked', dim: false, click: { kind: 'none' } });
+  });
+
+  it('改装单里起降口的两行：不能点的 3 级一行不看余额，钱再多也不能买', () => {
+    const state = withMoney(campaignState(), 1_000_000);
+    expect(gateRows(state, 0)[1]).toMatchObject({ note: 'locked', dim: false, click: { kind: 'none' } });
+    withMoney(state, 0);
+    expect(gateRows(state, 0)[1]).toMatchObject({ note: 'locked', dim: false, click: { kind: 'none' } });
+  });
+
+  it('改装单里起降口的两行：升到 2 级之后，2 级写已购买，3 级能买', () => {
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'upgradeGate', station: 0 });
+    const [second, third] = gateRows(state, 0);
+    expect(second).toEqual({ key: 'gate2', price: gatePrice(2), note: 'owned', dim: false, click: { kind: 'hint', hint: 'alreadyOwned' } });
+    expect(third).toEqual({ key: 'gate3', price: gatePrice(3), note: 'desc', dim: false, click: { kind: 'run', command: { type: 'upgradeGate', station: 0 } } });
+    withMoney(state, gatePrice(3) - 1);
+    expect(gateRows(state, 0)[1]).toMatchObject({ note: 'desc', dim: true });
+  });
+
+  it('改装单里起降口的两行：升到 3 级之后，两行都写已购买', () => {
+    const state = withMoney(campaignState(), 10_000);
+    must(state, { type: 'upgradeGate', station: 0 });
+    must(state, { type: 'upgradeGate', station: 0 });
+    expect(gateRows(state, 0).map((g) => [g.key, g.note, g.click])).toEqual([
+      ['gate2', 'owned', { kind: 'hint', hint: 'alreadyOwned' }],
+      ['gate3', 'owned', { kind: 'hint', hint: 'alreadyOwned' }],
+    ]);
+  });
+
+  it('改装单里起降口的两行：各座站各算各的', () => {
+    const state = withMoney(campaignState(), 10_000);
+    const second = must(state, { type: 'buildStation', roof: 1 });
+    must(state, { type: 'upgradeGate', station: 0 });
+    expect(gateRows(state, 0).map((g) => g.note)).toEqual(['owned', 'desc']);
+    expect(gateRows(state, second).map((g) => g.note)).toEqual(['desc', 'locked']);
+  });
+
   it('起降口的价格取自价格表：2 级和 3 级', () => {
     expect([gatePrice(2), gatePrice(3)]).toEqual([ECONOMY_V1.gatePrice[1], ECONOMY_V1.gatePrice[2]]);
   });
@@ -178,6 +282,8 @@ describe('改装列表', () => {
     nearbyLandingItem(state);
     gateItem(state, 0);
     gateItem(state, null);
+    gateRows(state, 0);
+    gateRows(state, null);
     expect(hashState(state)).toBe(before);
     expect(JSON.stringify(state)).toBe(json);
   });

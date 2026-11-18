@@ -4,11 +4,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { FORECAST_V1 } from '../src/content/forecast_v1.ts';
 import { CONTENT_VERSION as tableVersionConst } from '../src/content/version.ts';
 
 // 旧存档样本是在内容版本 3 时写的。现在的内容版本可能更高，按数字比较，不按字面量类型
 const tableVersion: number = tableVersionConst;
-import { DAY_STEPS, advance, createState, hashState, settleAway, step } from '../src/core/index.ts';
+import { DAY_STEPS, advance, applyCommand, createState, hashState, isUnlocked, settleAway, step } from '../src/core/index.ts';
 import type { SimState } from '../src/core/index.ts';
 import {
   CONTENT_VERSION,
@@ -26,7 +27,7 @@ import {
 import type { FailureCode } from '../src/save/index.ts';
 import { playGame } from '../tools/autoplay-lib.ts';
 import type { PolicyId } from '../tools/autoplay-lib.ts';
-import { campaignOf } from './campaign-helpers.ts';
+import { campaignOf, expectRejected, must } from './campaign-helpers.ts';
 import { BUSY, WALL, campaignScript, readJson, richCampaign, runState } from './save-helpers.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,11 @@ describe('校验：经营模式的字段表', () => {
   it('完整的经营模式状态能存能读，状态和哈希都不变，经营模式的记录都在', () => {
     const campaign = campaignOf(RICH);
     expect(campaign.ruleSets).not.toBeNull();
+    // 存档格式 4 的新字段都有值：小结的机队时间构成和各站的行，日结的运力占用，两份计数，就近降落的标记
+    expect(campaign.peaks.every((p) => p.fleet !== null && p.fleetBack !== null && p.stations.length >= 1)).toBe(true);
+    expect(campaign.days.every((d) => d.busy !== null && d.busy.length === 24)).toBe(true);
+    expect(campaign.tally.day.drones.some((n) => n > 0)).toBe(true);
+    expect(typeof campaign.nearestOwned).toBe('boolean');
     expect(campaign.days.length).toBeGreaterThanOrEqual(4);
     expect(campaign.peaks.length).toBeGreaterThanOrEqual(8);
     expect(campaign.tips.length).toBeGreaterThanOrEqual(5);
@@ -66,6 +72,48 @@ describe('校验：经营模式的字段表', () => {
     if (!result.ok) return;
     expect(result.state).toEqual(RICH);
     expect(hashState(result.state)).toBe(hashState(RICH));
+  });
+
+  it('存档格式 4 的新字段往返存读不变：就近降落的标记和开关，两份计数，小结的机队时间构成、回站飞行占比和各站的行，日结的运力占用，包括 null 和有值两种', () => {
+    const state = structuredClone(RICH);
+    const campaign = campaignOf(state);
+    campaign.nearestOwned = true;
+    state.returnRule = 'home'; // 买过，现在关着
+    // 当场高峰和当天的计数里都有数
+    Object.assign(campaign.tally.peak, { steps: 437, takeoffWait: [11, 0], queue: [30, 5], sorties: [9, 4], fleet: [[1, 2, 3, 4, 5], [0, 0, 7, 0, 1]], back: [2, 0] });
+    campaign.tally.day.drones[3] = 1234;
+    campaign.tally.day.used[3] = 777;
+    // 小结的两种写法：有机队时间构成和各站的行（起降排队有值和为 null 的两种，站的机队时间构成有值和为 null 的两种），以及没有的（旧的记录）
+    const full = campaign.peaks[0]!;
+    full.fleet = { loaded: 12, empty: 34, work: 20, queue: 6, parked: 28 };
+    full.fleetBack = 21;
+    full.stations = [
+      { station: 0, gateWait: 1.4, landWaitAvg: 0.8333333333333334, takeoffWaitPct: 16, queuePct: 21, sorties: 17, fleet: { loaded: 10, empty: 30, work: 20, queue: 10, parked: 30 } },
+      { station: 1, gateWait: null, landWaitAvg: 0, takeoffWaitPct: 0, queuePct: 0, sorties: 0, fleet: null },
+    ];
+    const old = campaign.peaks[1]!;
+    old.fleet = null;
+    old.fleetBack = null;
+    old.stations = [];
+    campaign.days[0]!.busy = Array.from({ length: 24 }, (_, i) => (i * 7) % 101);
+    campaign.days[1]!.busy = null;
+    const text = textOf(state);
+    const back = parseSave(text);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.migratedFrom).toBeNull();
+    expect(back.state).toEqual(state);
+    expect(campaignOf(back.state).tally.peak.back).toEqual([2, 0]);
+    expect(campaignOf(back.state).peaks.slice(0, 2).map((p) => p.fleetBack)).toEqual([21, null]);
+    expect(hashState(back.state)).toBe(hashState(state));
+    expect(textOf(back.state)).toBe(text); // 再存一次，文本逐字相同
+    // 哈希覆盖回站飞行的计数和小结里的回站飞行占比：改一个数，哈希就变
+    const tallyChanged = structuredClone(state);
+    campaignOf(tallyChanged).tally.peak.back[0] = 3;
+    expect(hashState(tallyChanged)).not.toBe(hashState(state));
+    const shareChanged = structuredClone(state);
+    campaignOf(shareChanged).peaks[0]!.fleetBack = 22;
+    expect(hashState(shareChanged)).not.toBe(hashState(state));
   });
 
   it('campaign 的每一个字段缺失，都能指出缺的是哪一个', () => {
@@ -127,6 +175,39 @@ describe('校验：经营模式的字段表', () => {
     ['state.campaign.days[0].peaksJudged', 1.5, 'schema'],
     ['state.campaign.days[0].peaksCleared', null, 'non-finite'],
     ['state.campaign.away', 3, 'schema'],
+    ['state.campaign.nearestOwned', 1, 'schema'],
+    ['state.campaign.tally', 'none', 'schema'],
+    ['state.campaign.tally.peak.steps', 1.5, 'schema'],
+    ['state.campaign.tally.peak.steps', -1, 'schema'],
+    ['state.campaign.tally.peak.fleet', {}, 'schema'],
+    ['state.campaign.tally.peak.fleet[0][1]', null, 'non-finite'],
+    ['state.campaign.tally.peak.back', {}, 'schema'],
+    ['state.campaign.tally.peak.back[0]', 0.5, 'schema'],
+    ['state.campaign.tally.peak.back[0]', -1, 'schema'],
+    ['state.campaign.tally.peak.back[1]', null, 'non-finite'],
+    ['state.campaign.tally.peak.takeoffWait[0]', '3', 'schema'],
+    ['state.campaign.tally.peak.queue', 7, 'schema'],
+    ['state.campaign.tally.peak.sorties[0]', 0.5, 'schema'],
+    ['state.campaign.tally.day.drones', null, 'schema'],
+    ['state.campaign.tally.day.used[3]', null, 'non-finite'],
+    ['state.campaign.peaks[0].fleet', 'half', 'schema'],
+    ['state.campaign.peaks[0].fleet.work', null, 'non-finite'],
+    ['state.campaign.peaks[0].fleetBack', 'half', 'schema'],
+    ['state.campaign.peaks[0].fleetBack', [], 'schema'],
+    ['state.campaign.peaks[0].stations', {}, 'schema'],
+    ['state.campaign.peaks[0].stations[0].station', 0.5, 'schema'],
+    ['state.campaign.peaks[0].stations[0].gateWait', 'slow', 'schema'],
+    ['state.campaign.peaks[0].stations[0].queuePct', null, 'non-finite'],
+    ['state.campaign.peaks[0].stations[0].sorties', '3', 'schema'],
+    ['state.campaign.peaks[0].stations[0].fleet', 5, 'schema'],
+    ['state.campaign.days[0].busy', 3, 'schema'],
+    ['state.campaign.days[0].busy[2]', null, 'non-finite'],
+    ['state.campaign.days[0].effects', 'none', 'schema'],
+    ['state.campaign.forecast', 'none', 'schema'],
+    ['state.campaign.forecast.charges', 1.5, 'schema'],
+    ['state.campaign.forecast.charges', -1, 'schema'],
+    ['state.campaign.forecast.charges', null, 'non-finite'],
+    ['state.campaign.effectWatches', {}, 'schema'],
     ['state.capacity', '2', 'schema'],
     ['state.returnRule', 1, 'schema'],
     ['state.config.mode', 1, 'schema'],
@@ -144,6 +225,21 @@ describe('校验：经营模式的字段表', () => {
     const result = failure(input);
     expect(result.code).toBe(code);
     expect(result.paths).toContain(path);
+  });
+
+  it('小结记录缺 fleetBack、当场高峰的计数缺 back：指出缺的是哪一个。fleetBack 可以是 null，写成 null 或整数都通过', () => {
+    const noShare = failure(tampered(RICH, (save) => delete save.state.campaign.peaks[0].fleetBack));
+    expect(noShare.code).toBe('schema');
+    expect(noShare.paths).toEqual(['state.campaign.peaks[0].fleetBack']);
+    const noBack = failure(tampered(RICH, (save) => delete save.state.campaign.tally.peak.back));
+    expect(noBack.code).toBe('schema');
+    expect(noBack.paths).toEqual(['state.campaign.tally.peak.back']);
+    const nulls = tampered(RICH, (save) => {
+      for (const peak of save.state.campaign.peaks) peak.fleetBack = null;
+    });
+    expect(parseSave(nulls).ok).toBe(true);
+    const zero = tampered(RICH, (save) => (save.state.campaign.peaks[0].fleetBack = 0));
+    expect(parseSave(zero).ok).toBe(true);
   });
 
   it('可以为 null 的字段：没有订单的百分数、没有升星的店、两套策略、结局，写成 null 或有值都通过', () => {
@@ -250,6 +346,131 @@ describe('校验：真实的运行产生的状态都通过，不会把合法的�
   });
 });
 
+describe('校验：数据员和效果记录的字段', () => {
+  /**
+   * 推演次数，三笔还在跟踪的购买（购买前的数值有值和为 null 的，没有小结记录的，副本记下的数有和没有的），和日结里的三种效果行（含不购买时的数）。
+   * 效果行里的数故意取除不尽的小数，往返之后一位也不能变。
+   */
+  function withEffects(): SimState {
+    const state = structuredClone(RICH);
+    const campaign = campaignOf(state);
+    campaign.forecast.charges = 3;
+    campaign.effectWatches = [
+      {
+        kind: 'gate',
+        step: 9000,
+        station: 1,
+        level: 2,
+        peak: 'noon',
+        beforeDay: 2,
+        before: 1.4285714285714286,
+        left: 2,
+        twins: [
+          { day: 3, peak: 'noon', value: 1.8571428571428572 },
+          { day: 4, peak: 'noon', value: 0.9 },
+        ],
+      },
+      { kind: 'doubleBox', step: 9100, station: null, level: null, peak: 'evening', beforeDay: 2, before: null, left: 3, twins: [] },
+      { kind: 'nearest', step: 9200, station: null, level: null, peak: null, beforeDay: null, before: null, left: 1, twins: [] },
+    ];
+    campaign.days[1]!.effects = [
+      { kind: 'gate', station: 1, level: 2, peak: 'noon', beforeDay: 0, afterDay: 1, before: 1.4, after: 0.5, twin: 1.2857142857142858 },
+      { kind: 'doubleBox', station: null, level: null, peak: 'evening', beforeDay: 0, afterDay: 1, before: 1.0833333333333333, after: 1.25, twin: 1.0909090909090908 },
+      { kind: 'nearest', station: null, level: null, peak: 'noon', beforeDay: 0, afterDay: 1, before: 37, after: 29, twin: 38 },
+    ];
+    return state;
+  }
+
+  it('往返存读不变：推演次数、购买的效果跟踪（有值和 null 两种）、日结里的三种效果行，状态和哈希都不变，再存一次文本逐字相同', () => {
+    const state = withEffects();
+    const text = textOf(state);
+    const back = parseSave(text);
+    expect(back.ok).toBe(true);
+    if (!back.ok) return;
+    expect(back.migratedFrom).toBeNull();
+    expect(back.state).toEqual(state);
+    expect(campaignOf(back.state).forecast).toEqual({ charges: 3 });
+    expect(campaignOf(back.state).effectWatches).toHaveLength(3);
+    expect(campaignOf(back.state).days[1]!.effects).toHaveLength(3);
+    expect(hashState(back.state)).toBe(hashState(state));
+    expect(textOf(back.state)).toBe(text);
+    // 哈希覆盖新字段：改一个数，哈希就变。副本记下的数（跟踪里的 twins）和不购买时的数（效果行里的 twin）也在内
+    const other = structuredClone(state);
+    campaignOf(other).days[1]!.effects[0]!.after = 0.6;
+    expect(hashState(other)).not.toBe(hashState(state));
+    const twinLine = structuredClone(state);
+    campaignOf(twinLine).days[1]!.effects[0]!.twin += 0.1;
+    expect(hashState(twinLine)).not.toBe(hashState(state));
+    const twinWatch = structuredClone(state);
+    campaignOf(twinWatch).effectWatches[0]!.twins[1]!.value += 0.1;
+    expect(hashState(twinWatch)).not.toBe(hashState(state));
+    const noTwins = structuredClone(state);
+    campaignOf(noTwins).effectWatches[0]!.twins = [];
+    expect(hashState(noTwins)).not.toBe(hashState(state));
+  });
+
+  // 路径、把它改成什么、期望的失败类型
+  const CASES: [string, unknown, FailureCode][] = [
+    ['state.campaign.effectWatches[0].kind', 3, 'schema'],
+    ['state.campaign.effectWatches[0].step', 1.5, 'schema'],
+    ['state.campaign.effectWatches[0].left', -1, 'schema'],
+    ['state.campaign.effectWatches[0].left', null, 'non-finite'],
+    ['state.campaign.effectWatches[0].station', 'one', 'schema'],
+    ['state.campaign.effectWatches[0].level', 1.5, 'schema'],
+    ['state.campaign.effectWatches[0].peak', 5, 'schema'],
+    ['state.campaign.effectWatches[0].beforeDay', 0.5, 'schema'],
+    ['state.campaign.effectWatches[0].before', 'x', 'schema'],
+    ['state.campaign.effectWatches[0].twins', 'none', 'schema'],
+    ['state.campaign.effectWatches[0].twins', {}, 'schema'],
+    ['state.campaign.effectWatches[0].twins[0].day', 0.5, 'schema'],
+    ['state.campaign.effectWatches[0].twins[0].peak', 5, 'schema'],
+    ['state.campaign.effectWatches[0].twins[1].value', 'x', 'schema'],
+    ['state.campaign.effectWatches[0].twins[1].value', null, 'non-finite'],
+    ['state.campaign.days[1].effects[0].kind', 1, 'schema'],
+    ['state.campaign.days[1].effects[0].peak', 0, 'schema'],
+    ['state.campaign.days[1].effects[0].station', 'a', 'schema'],
+    ['state.campaign.days[1].effects[0].level', {}, 'schema'],
+    ['state.campaign.days[1].effects[0].beforeDay', 0.5, 'schema'],
+    ['state.campaign.days[1].effects[0].afterDay', 1.5, 'schema'],
+    ['state.campaign.days[1].effects[0].before', null, 'non-finite'],
+    ['state.campaign.days[1].effects[1].after', 'x', 'schema'],
+    ['state.campaign.days[1].effects[0].twin', 'x', 'schema'],
+    ['state.campaign.days[1].effects[2].twin', null, 'non-finite'],
+  ];
+
+  it.each(CASES)('把 %s 改成 %j：不通过，类型是 %s，并指出这个字段', (path, value, code) => {
+    const input = tampered(withEffects(), (save) => {
+      const keys = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+      let node = save as Record<string, any>;
+      for (const key of keys.slice(0, -1)) node = node[key];
+      node[keys[keys.length - 1] as string] = value;
+    });
+    const result = failure(input);
+    expect(result.code).toBe(code);
+    expect(result.paths).toContain(path);
+  });
+
+  it('效果行和效果跟踪缺字段：指出缺的是哪一个；站编号、等级可以是 null', () => {
+    const line = failure(tampered(withEffects(), (save) => delete save.state.campaign.days[1].effects[0].before));
+    expect(line.paths).toEqual(['state.campaign.days[1].effects[0].before']);
+    const watch = failure(tampered(withEffects(), (save) => delete save.state.campaign.effectWatches[1].left));
+    expect(watch.paths).toEqual(['state.campaign.effectWatches[1].left']);
+    // 副本记下的数和不购买时的数是必须有的字段：缺了指出缺的是哪一个
+    const twins = failure(tampered(withEffects(), (save) => delete save.state.campaign.effectWatches[1].twins));
+    expect(twins.paths).toEqual(['state.campaign.effectWatches[1].twins']);
+    const twin = failure(tampered(withEffects(), (save) => delete save.state.campaign.days[1].effects[2].twin));
+    expect(twin.paths).toEqual(['state.campaign.days[1].effects[2].twin']);
+    const entry = failure(tampered(withEffects(), (save) => delete save.state.campaign.effectWatches[0].twins[0].value));
+    expect(entry.paths).toEqual(['state.campaign.effectWatches[0].twins[0].value']);
+    const nulls = tampered(withEffects(), (save) => {
+      save.state.campaign.days[1].effects[1].station = null;
+      save.state.campaign.effectWatches[0].station = null;
+      save.state.campaign.effectWatches[0].level = null;
+    });
+    expect(parseSave(nulls).ok).toBe(true);
+  });
+});
+
 // ---- 旧格式 ----
 
 /** 存档模块的版本 1 写出的一份经营模式存档，老街和写字楼区都开通，打了五个游戏日。样本在 fixtures 里，gzip 压缩过。 */
@@ -257,25 +478,72 @@ function legacyText(): string {
   return gunzipSync(readFileSync(join(HERE, 'fixtures', 'save-v1-campaign.json.gz'))).toString('utf8');
 }
 
-/** 版本 3 加的记录字段，版本 1 的存档还没有 away。把读进来的状态里的这些字段拿掉，就是旧存档里原来的样子。 */
-function withoutAddedFields(state: SimState, keepAway = false): SimState {
+/**
+ * 把读进来的状态里，比样本的版本新的版本加的字段拿掉，就是旧存档里原来的样子：
+ * 版本 2 加了 away（版本 1 的样本没有），版本 3 加了目标线、达标标记、小结对照和每场的达标场数，
+ * 版本 4 加了 nearestOwned、机队时间和排队的计数 tally（含回站飞行的计数 back）、小结的 fleet、fleetBack 和 stations、日结的 busy，
+ * 还有数据员和效果记录：推演次数 forecast、购买的效果跟踪 effectWatches、日结的效果行 effects、开放项 dataClerk。
+ * 版本 4 的迁移还把价签已开放而双层货箱没开放的存档补成同一步开放，这一项由 expectMigratedFrom 单独核对。
+ */
+function withoutAddedFields(state: SimState, from: 1 | 2 | 3): SimState {
   const copy = structuredClone(state) as unknown as { campaign: Record<string, any> };
   const campaign = copy.campaign;
-  if (!keepAway) delete campaign.away;
-  delete campaign.goals;
-  for (const peak of campaign.peaks) {
-    delete peak.cleared;
-    delete peak.baseline;
-    for (const row of peak.districts) {
-      delete row.line;
-      delete row.met;
+  if (from < 2) delete campaign.away;
+  if (from < 3) {
+    delete campaign.goals;
+    for (const peak of campaign.peaks) {
+      delete peak.cleared;
+      delete peak.baseline;
+      for (const row of peak.districts) {
+        delete row.line;
+        delete row.met;
+      }
+    }
+    for (const day of campaign.days) {
+      delete day.peaksJudged;
+      delete day.peaksCleared;
     }
   }
+  delete campaign.nearestOwned;
+  delete campaign.tally;
+  delete campaign.forecast;
+  delete campaign.effectWatches;
+  delete campaign.unlocks.dataClerk;
+  // 价签已开放的存档，迁移补开数据员时放出一张「数据员已到岗」的便签。样本里没有这张便签，拿掉之后与原来相同
+  campaign.tips = campaign.tips.filter((tip: { id: string }) => tip.id !== 'dataClerk');
+  for (const peak of campaign.peaks) {
+    delete peak.fleet;
+    delete peak.fleetBack;
+    delete peak.stations;
+  }
   for (const day of campaign.days) {
-    delete day.peaksJudged;
-    delete day.peaksCleared;
+    delete day.busy;
+    delete day.effects;
   }
   return copy as unknown as SimState;
+}
+
+/**
+ * 迁移过的状态和样本里的原状态相比：把加的字段拿掉之后逐字段相同，只有双层货箱的开放步例外：
+ * 样本里价签已开放而双层货箱没开放时，迁移把它补成价签开放的那一步。from 是样本的存档版本。
+ * 数据员和效果记录的默认值也在这里核对：数据员的开放步是价签的开放步（价签没开放是 -1），推演次数 0，效果跟踪空，日结的效果行空。
+ */
+function expectMigratedFrom(migrated: SimState, original: SimState, from: 1 | 2 | 3): void {
+  const added = campaignOf(migrated);
+  const opened = campaignOf(original).unlocks.priceTags;
+  expect(added.unlocks.dataClerk).toBe(opened >= 0 ? opened : -1);
+  // 价签已开放的存档多一张数据员便签，步数是读档时的步。没开放的不放
+  const clerkTips = added.tips.filter((tip) => tip.id === 'dataClerk');
+  expect(clerkTips).toEqual(opened >= 0 ? [{ id: 'dataClerk', step: migrated.step, station: null, read: false }] : []);
+  expect(added.forecast).toEqual({ charges: 0 });
+  expect(added.effectWatches).toEqual([]);
+  expect(added.days.every((day) => day.effects.length === 0)).toBe(true);
+  const stripped = withoutAddedFields(migrated, from);
+  const before = campaignOf(original).unlocks;
+  const after = campaignOf(stripped).unlocks;
+  expect(after.doubleBox).toBe(before.doubleBox < 0 && before.priceTags >= 0 ? before.priceTags : before.doubleBox);
+  after.doubleBox = before.doubleBox;
+  expect(stripped).toEqual(original);
 }
 
 /** 样本里记着的事实，生成样本的当时从状态里读出来的。 */
@@ -329,7 +597,7 @@ describe('旧格式的存档（版本 1）', () => {
     expect(state.drones).toHaveLength(LEGACY.drones);
     expect(campaign.days).toHaveLength(LEGACY.days);
     expect(campaign.peaks).toHaveLength(LEGACY.peaks);
-    expect(campaign.tips).toHaveLength(LEGACY.tips);
+    expect(campaign.tips.filter((t) => t.id !== 'dataClerk')).toHaveLength(LEGACY.tips); // 迁移另放的数据员便签不算
     expect(campaign.districts.map((d) => d.star)).toEqual(LEGACY.stars);
     expect(state.rules).toEqual(LEGACY.rules);
     expect(state.config.seed).toBe(LEGACY.seed);
@@ -337,7 +605,7 @@ describe('旧格式的存档（版本 1）', () => {
     // 迁移只加了字段：away，以及版本 3 的记录字段。把它们拿掉，整个状态与样本里的逐字段相同
     expect(campaign.away).toEqual([]);
     const original = (JSON.parse(legacyText()) as { state: SimState }).state;
-    expect(withoutAddedFields(state)).toEqual(original);
+    expectMigratedFrom(state, original, 1);
   });
 
   it('外层的内容版本：版本 1 写的是字符串，迁移时取状态里记着的真正的内容版本，是一个整数', () => {
@@ -520,7 +788,7 @@ describe('旧格式的存档（版本 2）', () => {
     expect(campaign.delivered).toBe(V2.delivered);
     expect(campaign.days).toHaveLength(V2.days);
     expect(campaign.peaks).toHaveLength(V2.peaks);
-    expect(campaign.tips).toHaveLength(V2.tips);
+    expect(campaign.tips.filter((t) => t.id !== 'dataClerk')).toHaveLength(V2.tips); // 迁移另放的数据员便签不算
     expect(campaign.districts.map((d) => d.star)).toEqual(V2.stars);
     expect(state.rules).toEqual(V2.rules);
     expect(state.config.seed).toBe(V2.seed);
@@ -534,7 +802,7 @@ describe('旧格式的存档（版本 2）', () => {
     for (const day of campaign.days) expect([day.peaksJudged, day.peaksCleared]).toEqual([0, 0]);
     // 迁移只加了字段：把它们拿掉，整个状态与样本里的逐字段相同
     const original = (JSON.parse(v2Text()) as { state: SimState }).state;
-    expect(withoutAddedFields(state, true)).toEqual(original);
+    expectMigratedFrom(state, original, 2);
   });
 
   it('读进来的状态存出去再读回来，状态和哈希都不变，不再经过迁移', () => {
@@ -618,6 +886,289 @@ describe('旧格式的存档（版本 2）', () => {
       });
       expect(failure(input).paths, path).toContain(path);
     }
+  });
+});
+
+// ---- 版本 3 的存档 ----
+
+/**
+ * 存档模块的版本 3 写出的一份经营模式存档，均衡玩法，订单种子 7，打了五个游戏日，与上面的 RICH 是同一局。
+ * 样本用提交 1befb4e 的代码生成，在 fixtures 里，gzip 压缩过。
+ */
+function v3Text(): string {
+  return gunzipSync(readFileSync(join(HERE, 'fixtures', 'save-v3-campaign.json.gz'))).toString('utf8');
+}
+
+/** 版本 3 样本里记着的事实，生成样本的当时从状态里读出来的。 */
+const V3 = {
+  chars: 185_372,
+  step: 18_001,
+  contentVersion: 5,
+  money: 62.26922794156319,
+  spent: 2040,
+  orders: 319,
+  delivered: 283,
+  stations: 2,
+  drones: 9,
+  days: 5,
+  peaks: 10,
+  tips: 6,
+  stars: [4, 1, 1],
+  rules: { select: 'prioOffice', zone: 'hybrid', pool: 'single' },
+  seed: 7,
+  savedAt: 1_731_400_000_000,
+  priceTagsAt: 3600,
+};
+
+describe('旧格式的存档（版本 3）', () => {
+  it('样本确实是版本 3 的写法：没有 nearestOwned，价签已开放而双层货箱还没开放', () => {
+    const text = v3Text();
+    expect(text).toHaveLength(V3.chars);
+    const raw = JSON.parse(text) as Record<string, any>;
+    expect(raw.version).toBe(3);
+    // 样本是内容版本 5 时写的，之后内容表再改，样本里记的版本不变
+    expect(raw.contentVersion).toBe(V3.contentVersion);
+    expect(raw.savedAt).toBe(V3.savedAt);
+    const campaign = raw.state.campaign;
+    expect(campaign.nearestOwned).toBeUndefined();
+    expect(campaign.unlocks.priceTags).toBe(V3.priceTagsAt);
+    expect(campaign.unlocks.doubleBox).toBe(-1);
+    expect(raw.state.returnRule).toBe('home');
+    expect(campaign.peaks).toHaveLength(V3.peaks);
+    expect(campaign.days).toHaveLength(V3.days);
+  });
+
+  it('能读：先迁移再校验，新字段补默认值，已有的值一个没改，只有双层货箱的开放步补成价签的开放步', () => {
+    const result = parseSave(v3Text());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.migratedFrom).toBe(3);
+    expect(result.version).toBe(SAVE_VERSION);
+    expect(result.savedAt).toBe(V3.savedAt);
+    expect(result.contentVersion).toBe(V3.contentVersion);
+    expect(result.contentChanged).toBe(tableVersion !== V3.contentVersion); // 内容表升到版本 6，样本里记的仍是 5，读档照常读
+    const state = result.state;
+    const campaign = campaignOf(state);
+    expect(state.step).toBe(V3.step);
+    expect(campaign.money).toBe(V3.money);
+    expect(campaign.spent).toBe(V3.spent);
+    expect(state.orders).toHaveLength(V3.orders);
+    expect(campaign.delivered).toBe(V3.delivered);
+    expect(state.stations).toHaveLength(V3.stations);
+    expect(state.drones).toHaveLength(V3.drones);
+    expect(campaign.days).toHaveLength(V3.days);
+    expect(campaign.peaks).toHaveLength(V3.peaks);
+    expect(campaign.tips.filter((t) => t.id !== 'dataClerk')).toHaveLength(V3.tips); // 迁移另放的数据员便签不算
+    expect(campaign.districts.map((d) => d.star)).toEqual(V3.stars);
+    expect(state.rules).toEqual(V3.rules);
+    expect(state.config.seed).toBe(V3.seed);
+    // 新字段的默认值：原来是回原站，没有买就近降落。机队时间和排队的计数补成全零，每座站一行
+    expect(campaign.nearestOwned).toBe(false);
+    expect(state.returnRule).toBe('home');
+    // 旧的小结和日结没有记过机队时间、回站飞行占比、各站的行和运力占用：fleet 和 fleetBack 是 null，stations 是空的，busy 是 null
+    for (const peak of campaign.peaks) expect([peak.fleet, peak.fleetBack, peak.stations]).toEqual([null, null, []]);
+    for (const day of campaign.days) expect(day.busy).toBeNull();
+    expect(campaign.tally).toEqual({
+      peak: { steps: 0, fleet: [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]], back: [0, 0], takeoffWait: [0, 0], queue: [0, 0], sorties: [0, 0] },
+      day: { drones: new Array<number>(24).fill(0), used: new Array<number>(24).fill(0) },
+    });
+    // 价签开放的那一步，双层货箱和数据员同时开放
+    expect(campaign.unlocks.priceTags).toBe(V3.priceTagsAt);
+    expect(campaign.unlocks.doubleBox).toBe(V3.priceTagsAt);
+    expect(campaign.unlocks.dataClerk).toBe(V3.priceTagsAt);
+    // 推演次数是 0，没有在跟踪的购买，旧的日结没有效果行
+    expect(campaign.forecast).toEqual({ charges: 0 });
+    expect(campaign.effectWatches).toEqual([]);
+    for (const day of campaign.days) expect(day.effects).toEqual([]);
+    // 迁移只加了字段，只有双层货箱的开放步例外：其余与样本逐字段相同
+    expectMigratedFrom(state, (JSON.parse(v3Text()) as { state: SimState }).state, 3);
+  });
+
+  it('迁移补成全零的计数，从读档的那一步起累计：高峰窗口里只计读档之后的步，全天的分段只计读档之后的无人机', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    const live = state.drones.filter((d) => !d.removed).length;
+    expect(state.step).toBe(V3.step); // 第 5 天的第 1 步
+    advance(state, 1000); // 到第 5 天的第 1001 步，午高峰的下单时段从第 600 步起
+    const tally = campaignOf(state).tally;
+    expect(tally.peak.steps).toBe(1001 - 600);
+    expect(tally.day.drones.reduce((a, b) => a + b, 0)).toBe(live * 1000);
+    expect(tally.day.drones.slice(7).every((n) => n === 0)).toBe(true); // 第 1001 步在第 6 段，之后的段还没有数
+    expect(parseSave(textOf(state)).ok).toBe(true);
+  });
+
+  it('买过就近降落的版本 3 存档：nearestOwned 按 returnRule 补，开着的是 true，原来就是回原站的是 false', () => {
+    const raw = JSON.parse(v3Text()) as Record<string, any>;
+    raw.state.returnRule = 'nearest';
+    const owned = parseSave(JSON.stringify(raw));
+    expect(owned.ok && campaignOf(owned.state).nearestOwned).toBe(true);
+    expect(owned.ok && owned.state.returnRule).toBe('nearest');
+    raw.state.returnRule = 'home';
+    const notOwned = parseSave(JSON.stringify(raw));
+    expect(notOwned.ok && campaignOf(notOwned.state).nearestOwned).toBe(false);
+  });
+
+  it('价签没开放的版本 3 存档：双层货箱照样没开放，迁移不凭空开放；已开放的步原样保留', () => {
+    const early = JSON.parse(v3Text()) as Record<string, any>;
+    early.state.campaign.unlocks.priceTags = -1;
+    early.state.campaign.unlocks.doubleBox = -1;
+    const closed = parseSave(JSON.stringify(early));
+    expect(closed.ok && campaignOf(closed.state).unlocks.doubleBox).toBe(-1);
+    expect(closed.ok && campaignOf(closed.state).unlocks.dataClerk).toBe(-1);
+    const open = JSON.parse(v3Text()) as Record<string, any>;
+    open.state.campaign.unlocks.doubleBox = 7777;
+    const kept = parseSave(JSON.stringify(open));
+    expect(kept.ok && campaignOf(kept.state).unlocks.doubleBox).toBe(7777);
+  });
+
+  it('数据员：价签已开放的存档补成价签的开放步，同时放出「数据员已到岗」的便签，步数是读档时的步，之后的检查不会再放', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    expect(isUnlocked(state, 'dataClerk')).toBe(true);
+    expect(campaignOf(state).tips.filter((t) => t.id === 'dataClerk')).toEqual([{ id: 'dataClerk', step: V3.step, station: null, read: false }]);
+    advance(state, 10);
+    expect(campaignOf(state).unlocks.dataClerk).toBe(V3.priceTagsAt); // 开放的步不会被改写
+    expect(campaignOf(state).tips.filter((t) => t.id === 'dataClerk')).toHaveLength(1);
+  });
+
+  it('数据员：价签没开放的存档补成 -1，之后价签开放的那一步数据员同时到岗，放出便签，只放一次', () => {
+    const raw = JSON.parse(v3Text()) as Record<string, any>;
+    raw.state.campaign.unlocks.priceTags = -1;
+    raw.state.campaign.unlocks.doubleBox = -1;
+    raw.state.campaign.money = 500; // 余额够，读档之后的第一步价签就开放
+    const result = parseSave(JSON.stringify(raw));
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    expect(campaignOf(state).unlocks.dataClerk).toBe(-1);
+    advance(state, 5);
+    const campaign = campaignOf(state);
+    expect(campaign.unlocks.priceTags).toBe(V3.step);
+    expect(campaign.unlocks.dataClerk).toBe(V3.step);
+    expect(campaign.tips.filter((t) => t.id === 'dataClerk').map((t) => t.step)).toEqual([V3.step]);
+    advance(state, DAY_STEPS);
+    expect(campaignOf(state).tips.filter((t) => t.id === 'dataClerk')).toHaveLength(1);
+  });
+
+  it('推演次数：补成 0，数据员虽已到岗但次数不足；读档之后每场高峰的小结加一次，攒到内容表的上限为止，用 useForecast 扣', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    expect(campaignOf(state).forecast.charges).toBe(0);
+    expectRejected(state, { type: 'useForecast' }, 'noForecastCharge');
+    advance(state, DAY_STEPS); // 第 5 天的午、晚两场小结
+    expect(campaignOf(state).peaks).toHaveLength(V3.peaks + 2);
+    expect(campaignOf(state).forecast.charges).toBe(2);
+    must(state, { type: 'useForecast' });
+    expect(campaignOf(state).forecast.charges).toBe(1);
+    advance(state, 2 * DAY_STEPS);
+    expect(campaignOf(state).forecast.charges).toBe(FORECAST_V1.maxCharges);
+    expect(parseSave(textOf(state)).ok).toBe(true);
+  });
+
+  it('迁移之后买的改装：购买前的数值取最近一场小结记录。旧记录里没有各站的行和机队时间构成，所以是 null，只记下那一场是午高峰还是晚高峰，三次日结之后跟踪删掉，没有写过一行', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    const campaign = campaignOf(state);
+    const last = campaign.peaks[campaign.peaks.length - 1]!;
+    campaign.money = 10_000;
+    must(state, { type: 'buyDoubleBox' });
+    must(state, { type: 'upgradeGate', station: 0 });
+    expect(campaign.effectWatches).toEqual([
+      { kind: 'doubleBox', step: V3.step, station: null, level: null, peak: last.peak, beforeDay: last.day, before: null, left: FORECAST_V1.effectDays, twins: [] },
+      { kind: 'gate', step: V3.step, station: 0, level: 2, peak: last.peak, beforeDay: last.day, before: null, left: FORECAST_V1.effectDays, twins: [] },
+    ]);
+    advance(state, FORECAST_V1.effectDays * DAY_STEPS);
+    expect(campaign.effectWatches).toEqual([]);
+    expect(campaign.days.slice(V3.days).map((d) => d.effects)).toEqual([[], [], []]);
+    expect(parseSave(textOf(state)).ok).toBe(true);
+  });
+
+  it('效果跟踪里副本记下的数：版本 3 的存档里没有跟踪，迁移补的是空数组；万一跟踪已经在，twins 补成空数组，其余字段不动', () => {
+    const plain = parseSave(v3Text());
+    expect(plain.ok && campaignOf(plain.state).effectWatches).toEqual([]);
+    const raw = JSON.parse(v3Text()) as Record<string, any>;
+    const watch = { kind: 'gate', step: 5, station: 0, level: 2, peak: 'noon', beforeDay: 0, before: 1.5, left: 3 };
+    raw.state.campaign.effectWatches = [watch];
+    const result = parseSave(JSON.stringify(raw));
+    expect(result.ok && campaignOf(result.state).effectWatches).toEqual([{ ...watch, twins: [] }]);
+    // 已经有 twins 的原样保留
+    raw.state.campaign.effectWatches = [{ ...watch, twins: [{ day: 1, peak: 'noon', value: 0.8 }] }];
+    const kept = parseSave(JSON.stringify(raw));
+    expect(kept.ok && campaignOf(kept.state).effectWatches[0]!.twins).toEqual([{ day: 1, peak: 'noon', value: 0.8 }]);
+  });
+
+  it('读进来的状态存出去再读回来，状态和哈希都不变，不再经过迁移', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const again = parseSave(textOf(result.state));
+    expect(again.ok && again.migratedFrom).toBeNull();
+    expect(again.ok && again.state).toEqual(result.state);
+    expect(again.ok && hashState(again.state)).toBe(hashState(result.state));
+  });
+
+  it('迁移过的状态接着玩：照常运行两个游戏日，双层货箱马上能买，之后的存档照常读', () => {
+    const result = parseSave(v3Text());
+    if (!result.ok) throw new Error('version 3 save should load');
+    const state = result.state;
+    advance(state, 2 * DAY_STEPS);
+    const campaign = campaignOf(state);
+    expect(state.step).toBe(V3.step + 2 * DAY_STEPS);
+    expect(campaign.days.length).toBeGreaterThan(V3.days);
+    expect(campaign.peaks.length).toBeGreaterThan(V3.peaks);
+    expect(campaign.unlocks.doubleBox).toBe(V3.priceTagsAt); // 开放的步不会被改写
+    // 读档之后新生成的小结和日结有新字段：每座站一行，机队时间构成，24 段的运力占用。旧的记录仍然没有
+    const freshPeaks = campaign.peaks.slice(V3.peaks);
+    expect(freshPeaks.length).toBeGreaterThanOrEqual(4);
+    expect(freshPeaks.every((p) => p.fleet !== null && p.fleetBack !== null && p.stations.length === 2)).toBe(true);
+    expect(campaign.peaks.slice(0, V3.peaks).every((p) => p.fleet === null && p.fleetBack === null && p.stations.length === 0)).toBe(true);
+    // 读档之后新生成的回站飞行占比是整数，不大于同一场的空载飞行
+    for (const p of freshPeaks) {
+      expect(Number.isInteger(p.fleetBack)).toBe(true);
+      expect(p.fleetBack as number).toBeLessThanOrEqual(p.fleet?.empty as number);
+    }
+    const freshDays = campaign.days.slice(V3.days);
+    expect(freshDays).toHaveLength(2);
+    expect(freshDays.every((d) => d.busy !== null && d.busy.length === 24)).toBe(true);
+    expect(campaign.days.slice(0, V3.days).every((d) => d.busy === null)).toBe(true);
+    campaign.money = 10_000;
+    expect(applyCommand(state, { type: 'buyDoubleBox' })).toEqual({ ok: true, id: -1 });
+    expect(state.capacity).toBe(2);
+    expect(parseSave(textOf(state)).ok).toBe(true);
+    // 也能买下就近降落并开关
+    expect(applyCommand(state, { type: 'buyNearestLanding' }).ok).toBe(true);
+    expect(campaign.nearestOwned).toBe(true);
+    expect(applyCommand(state, { type: 'setNearestLanding', on: false }).ok).toBe(true);
+    const saved = parseSave(textOf(state));
+    expect(saved.ok && campaignOf(saved.state).nearestOwned).toBe(true);
+    expect(saved.ok && saved.state.returnRule).toBe('home');
+  });
+
+  it('版本 3 的存档内容有毛病，迁移之后照样被拦下', () => {
+    const raw = JSON.parse(v3Text()) as Record<string, any>;
+    delete raw.state.orders;
+    expect(failure(JSON.stringify(raw)).code).toBe('schema');
+    const raw2 = JSON.parse(v3Text()) as Record<string, any>;
+    raw2.state.campaign.money = null;
+    expect(failure(JSON.stringify(raw2)).code).toBe('non-finite');
+  });
+
+  it('存储里是版本 3 的 JSON 原文：读档照常读，读进来之后再存成最新的版本，旧文挪进备份一', async () => {
+    const legacy = v3Text();
+    const store = new MemoryStore({ [slotKey('main')]: legacy });
+    const loaded = await loadGame(store, WALL);
+    expect(loaded.status).toBe('ok');
+    expect(loaded.save?.migratedFrom).toBe(3);
+    expect(loaded.save?.fileVersion).toBe(3);
+    const state = loaded.state as SimState;
+    const saved = await saveGame(store, state, WALL + 1000);
+    expect(saved.ok).toBe(true);
+    expect(await store.get(slotKey('backup1'))).toBe(legacy);
+    const raw = JSON.parse(await readJson(store, 'main')) as Record<string, any>;
+    expect(raw.version).toBe(SAVE_VERSION);
+    expect(raw.state.campaign.nearestOwned).toBe(false);
   });
 });
 

@@ -116,6 +116,7 @@ describe('命令：不是经营模式', () => {
       { type: 'upgradeGate', station: 0 },
       { type: 'buyDoubleBox' },
       { type: 'buyNearestLanding' },
+      { type: 'setNearestLanding', on: true },
       { type: 'openDistrict', district: 1 },
       { type: 'setRules', rules: { select: 'deadline' } },
       { type: 'prioritizeOrder', order: 0 },
@@ -540,6 +541,86 @@ describe('命令：就近降落', () => {
     deliverAndLand(state);
     expect(state.drones.map((d) => d.home)).toEqual([0, 0]);
     expect(state.stations[0]?.occupied).toBe(2);
+  });
+
+  it('买下的同时记为买过：nearestOwned 为 true，开着', () => {
+    const state = twoStations();
+    expect(campaignOf(state).nearestOwned).toBe(false);
+    must(state, { type: 'buyNearestLanding' });
+    expect(campaignOf(state).nearestOwned).toBe(true);
+    expect(state.returnRule).toBe('nearest');
+  });
+
+  it('买下之后可以开关：免费，开着是 nearest，关着是 home，来回切换不限次数，余额和支出不动', () => {
+    const state = twoStations();
+    const campaign = campaignOf(state);
+    must(state, { type: 'buyNearestLanding' });
+    withMoney(state, 1000);
+    const spent = campaign.spent;
+    expect(quoteCommand(state, { type: 'setNearestLanding', on: false })).toEqual({ ok: true, reason: null, kind: 'free', price: 0 });
+    expect(quoteCommand(state, { type: 'setNearestLanding', on: true })).toEqual({ ok: true, reason: null, kind: 'free', price: 0 });
+    must(state, { type: 'setNearestLanding', on: false });
+    expect(state.returnRule).toBe('home');
+    must(state, { type: 'setNearestLanding', on: false }); // 已经关着，再关一次也算成功，什么也不变
+    expect(state.returnRule).toBe('home');
+    must(state, { type: 'setNearestLanding', on: true });
+    expect(state.returnRule).toBe('nearest');
+    for (let i = 0; i < 3; i++) {
+      must(state, { type: 'setNearestLanding', on: false });
+      must(state, { type: 'setNearestLanding', on: true });
+    }
+    expect([campaign.money, campaign.spent]).toEqual([1000, spent]);
+    expect(campaign.nearestOwned).toBe(true);
+    expect(state.returnRule).toBe('nearest');
+  });
+
+  it('没买下之前开关不能用：ruleLocked，状态不变，不论开还是关，也不论有没有两座站、钱够不够', () => {
+    const one = withMoney(quietState());
+    for (const on of [true, false]) expectRejected(one, { type: 'setNearestLanding', on }, 'ruleLocked');
+    const two = twoStations();
+    for (const on of [true, false]) expectRejected(two, { type: 'setNearestLanding', on }, 'ruleLocked');
+    expect(two.returnRule).toBe('home');
+    expect(campaignOf(two).nearestOwned).toBe(false);
+  });
+
+  it('开关的参数必须是 true 或 false，其余按 unknownTarget 拒绝', () => {
+    const state = twoStations();
+    must(state, { type: 'buyNearestLanding' });
+    for (const on of [1, 0, 'true', null, undefined]) expectRejected(state, { type: 'setNearestLanding', on } as never, 'unknownTarget');
+    expect(state.returnRule).toBe('nearest');
+  });
+
+  it('关掉之后再买：仍是 alreadyOwned，不重复收费，报价仍是 300', () => {
+    const state = twoStations();
+    must(state, { type: 'buyNearestLanding' });
+    must(state, { type: 'setNearestLanding', on: false });
+    withMoney(state);
+    expectRejected(state, { type: 'buyNearestLanding' }, 'alreadyOwned');
+    expect(quoteCommand(state, { type: 'buyNearestLanding' })).toEqual({ ok: false, reason: 'alreadyOwned', kind: 'buy', price: ECONOMY_V1.nearestLandingPrice });
+    expect(state.returnRule).toBe('home');
+  });
+
+  it('开关当场生效：关着时飞机送完回原站，再打开之后降落到最近的站', () => {
+    const state = twoStations();
+    must(state, { type: 'buyNearestLanding' });
+    must(state, { type: 'setNearestLanding', on: false });
+    deliverAndLand(state);
+    expect(state.drones.map((d) => d.home)).toEqual([0, 0]); // 与没买时一样
+    expect(state.stations.map((s) => s.occupied)).toEqual([2, 0]);
+    must(state, { type: 'setNearestLanding', on: true });
+    deliverAndLand(state);
+    expect(state.drones.map((d) => d.home).sort()).toEqual([0, 1]);
+    expect(state.stations.map((s) => s.occupied)).toEqual([1, 1]);
+  });
+
+  it('开局的配置里飞完回哪已经是 nearest：从一开始就算买过，不能再买，开关可用', () => {
+    const state = quietState({ returnRule: 'nearest' });
+    expect(campaignOf(state).nearestOwned).toBe(true);
+    withMoney(state);
+    must(state, { type: 'buildStation', roof: OLD_EAST });
+    expectRejected(state, { type: 'buyNearestLanding' }, 'alreadyOwned');
+    must(state, { type: 'setNearestLanding', on: false });
+    expect(state.returnRule).toBe('home');
   });
 });
 

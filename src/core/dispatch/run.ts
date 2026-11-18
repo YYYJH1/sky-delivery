@@ -4,6 +4,7 @@
 // 「提前派出」的统计要一份比较名单：同一批飞机、同样的条件，按下单顺序排一遍会派出哪些订单。
 // 实际派单和比较名单都由 planRound 在一份试算上算出一串动作，选飞机和插入的办法是同一段代码。
 // 实际派单再执行这串动作，名单只取动作里的订单编号。
+// 只读结果的副本（推演、小结的对照、效果记录里不购买的副本）用轻量派单，不算比较名单，见 dispatchRound 的 light 参数。
 import { HOVER_MARGIN, RESERVE, SPEED } from '../constants.ts';
 import { assignToDockedDrone, insertIntoRoute, isAvailable } from '../systems/drones.ts';
 import { backDistance } from '../systems/stations.ts';
@@ -220,8 +221,14 @@ export interface DispatchResult {
   early: number[];
 }
 
-/** 一轮派单。每 5 步调用一次。 */
-export function dispatchRound(state: SimState): DispatchResult {
+/**
+ * 一轮派单。每 5 步调用一次。
+ * light 为真时是轻量派单，只给不进存档、也不看「提前派出」统计的副本用（见 step.ts 的 stepLight）：
+ * 不算按下单顺序的比较名单，不记「提前派出」，order.early 和 stats.early 不变，返回的 early 为空。
+ * 其余步骤与不轻量时完全相同：排序、方案、哪张订单交给哪架飞机、插进哪条路线都一样。
+ * planRound 和 fifoRule.rank 都不修改状态，所以跳过它们不影响状态的其他部分。
+ */
+export function dispatchRound(state: SimState, light = false): DispatchResult {
   const select = getSelectRule(state.rules.select);
   const result: DispatchResult = { dispatched: [], early: [] };
   if (state.pending.length === 0) return result;
@@ -237,10 +244,13 @@ export function dispatchRound(state: SimState): DispatchResult {
 
   // 比较名单：用同一批飞机、同样的条件（站点分工、电量、一起送的限制）和同样的选飞机办法，
   // 把订单按下单顺序再排一遍（插队的订单仍在最前），算出这一轮会派出哪些订单。
-  // 实际的排序与下单顺序相同时，直接用实际的方案
-  const placed = manualFirst(orders, fifoRule.rank(ctx));
-  const placedPlan = sameSequence(sequence, placed) ? plan : planRound(round, placed);
-  const roster = placedPlan.map((a) => ctx.pendingIds[a.k] as number);
+  // 实际的排序与下单顺序相同时，直接用实际的方案。轻量派单不算
+  let roster: number[] | null = null;
+  if (!light) {
+    const placed = manualFirst(orders, fifoRule.rank(ctx));
+    const placedPlan = sameSequence(sequence, placed) ? plan : planRound(round, placed);
+    roster = placedPlan.map((a) => ctx.pendingIds[a.k] as number);
+  }
 
   // 按方案派单：交给空闲飞机，或者插进已有任务的飞机的路线
   for (const item of plan) {
@@ -250,6 +260,6 @@ export function dispatchRound(state: SimState): DispatchResult {
     result.dispatched.push(order.id);
   }
 
-  result.early = recordEarlyDispatches(state, roster, result.dispatched);
+  if (roster !== null) result.early = recordEarlyDispatches(state, roster, result.dispatched);
   return result;
 }

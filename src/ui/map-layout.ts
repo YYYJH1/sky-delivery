@@ -130,25 +130,33 @@ export function rectGap(a: Rect, b: Rect): number {
 
 // ---- 站点小卡的位置 ----
 
-/** 小卡的大小和离站点的距离，按 1920×1080 的尺寸写，窗口缩放时一起缩放。 */
+/**
+ * 小卡的大小和离站点的距离，按 1920×1080 的尺寸写，窗口缩放时一起缩放。
+ * CARD_HEIGHT 是一座站有最近一场高峰的记录、没有退回按钮时的高度，小卡还没量过大小时按它摆。
+ * 小卡里的块有的有、有的没有，实际的高度每次不同，摆放时用量出来的高度（见 cardPlacement 的 height）。
+ */
 export const CARD_WIDTH = 270;
-export const CARD_HEIGHT = 250;
+export const CARD_HEIGHT = 540;
 export const CARD_GAP = 16;
+/** 窗口下沿留给价签和片区纸条的高度，按 1920×1080 的尺寸。小卡变高之后往上提时，下沿停在这条线上，不压住它们。 */
+export const CARD_BOTTOM_RESERVE = 108;
 
 /**
  * 小卡摆在选中的站旁边：站的右边放得下就摆右边，放不下摆左边（flip 为 true，小卡的右边贴着站）。
- * 竖直方向和站的顶边对齐，放不下时往上提，不超出窗口。at 是站在窗口里的矩形，中心加宽高。
+ * 竖直方向和站的顶边对齐，放不下时往上提，下沿停在 CARD_BOTTOM_RESERVE 以上，窗口太矮时贴着上沿，不超出窗口。
+ * at 是站在窗口里的矩形，中心加宽高。height 是小卡现在的高度（按 1920×1080 的尺寸），不给时用 CARD_HEIGHT。
  */
 export function cardPlacement(
   at: { readonly x: number; readonly y: number; readonly w: number; readonly h: number },
   windowWidth: number,
   windowHeight: number,
   scale: number,
+  height: number = CARD_HEIGHT,
 ): { left: number; top: number; flip: boolean } {
   const right = at.x + at.w / 2 + CARD_GAP * scale;
   const flip = right + CARD_WIDTH * scale > windowWidth - 8;
   const left = flip ? at.x - at.w / 2 - CARD_GAP * scale : right;
-  const top = Math.min(Math.max(8, at.y - at.h / 2), Math.max(8, windowHeight - CARD_HEIGHT * scale - 8));
+  const top = Math.min(Math.max(8, at.y - at.h / 2), Math.max(8, windowHeight - (CARD_BOTTOM_RESERVE + height) * scale));
   return { left, top, flip };
 }
 

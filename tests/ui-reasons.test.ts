@@ -82,6 +82,21 @@ describe('提示文字', () => {
     expect(failureText('noFreeBay', { roofFull: true, limit: 6 })).toContain('6 个');
   });
 
+  it('全城的无人机总数已达停机位总数：不按屋顶选句子，这座站自己有空位时也写总数已满', () => {
+    expect(REASON_KEYS.bayTotalFull).toBe('bayTotalFull');
+    expect(failureText('bayTotalFull')).toBe(STR.reasons.bayTotalFull);
+    expect(failureText('bayTotalFull', { roofFull: false })).toBe(STR.reasons.bayTotalFull);
+    expect(STR.reasons.bayTotalFull).not.toBe(STR.reasons.noFreeBay);
+  });
+
+  it('推演次数不足：对到词表里同名的条目，不需要别的数；数据员没到岗时用的是 ruleLocked 的文字', () => {
+    expect(REASON_KEYS.noForecastCharge).toBe('noForecastCharge');
+    expect(failureText('noForecastCharge')).toBe(STR.reasons.noForecastCharge);
+    expect(failureText('noForecastCharge')).toBe('推演次数不足');
+    expect(failureText('ruleLocked')).toBe(STR.reasons.ruleLocked);
+    expect(failureContext(campaignState(), { type: 'useForecast' }, 'noForecastCharge')).toEqual({});
+  });
+
   it('停机位到了屋顶的上限、站数到了上限', () => {
     expect(failureText('bayLimit', { limit: 12 })).toBe(fmt(STR.reasons.bayLimitReached, { limit: 12 }));
     expect(failureText('stationLimit', { limit: 4 })).toBe(fmt(STR.reasons.stationLimitReached, { limit: 4 }));

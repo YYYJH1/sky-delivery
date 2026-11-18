@@ -2,11 +2,12 @@
 // 核心已经把数字、说明句的编号和参数记进了 campaign.peaks 和 campaign.days，这里只排版：
 // 每一行写什么，目标线和达标写在哪一行，与开局策略的对照写什么，纪录的小字，说明句从词表取哪一条。
 // 纯函数，不碰 DOM 和状态。
+import { GOALS_V1 } from '../content/goals_v1.ts';
 import { STARS_V1 } from '../content/stars_v1.ts';
 import { SHOPS, STR, districtName, fmt, peakName, placeName, ruleName, stationNumeral, starNumeral } from '../content/strings.zh.ts';
 import type { DistrictIndex } from '../content/strings.zh.ts';
 import { DEFAULT_CONFIG, dayOf, gainTotal, incomeStanding, peakStanding } from '../core/index.ts';
-import type { DayDistrictRecord, DayRecord, ExtraSentence, MainSentence, PeakBaseline, PeakDistrictRow, PeakRecord, PeakSegments, PeakStanding, SimState, Standing } from '../core/index.ts';
+import type { DayDistrictRecord, DayRecord, EffectLine, ExtraSentence, MainSentence, PeakBaseline, PeakDistrictRow, PeakFleet, PeakRecord, PeakSegments, PeakStanding, SimState, Standing } from '../core/index.ts';
 import { isRuleId } from './board.ts';
 import { wholeMoney } from './money.ts';
 import { peakClockRange } from './schedule.ts';
@@ -80,15 +81,30 @@ export interface SegmentItem {
   readonly longest: boolean;
 }
 
+/** 机队时间构成里的一段，写法和样式与一张单的四段时间相同。longest 为真时是五段里最长的一段，画圈。 */
+export interface FleetItem {
+  readonly id: keyof PeakFleet;
+  readonly text: string;
+  /** 这一段占的百分数，五段加起来是 100。五段拼成的横杠按它画。 */
+  readonly share: number;
+  readonly longest: boolean;
+}
+
+/** 机队时间构成：标题和五段，小结和站点小卡用同一组文字。 */
+export interface FleetBlock {
+  readonly header: string;
+  readonly items: readonly FleetItem[];
+}
+
 /** 与开局策略的对照：同一批订单、同样的购买，「调度策略」和「协同策略」用开局的卡的结果。 */
 export interface CompareBlock {
   readonly header: string;
   /** 开局策略用的两张卡的名称。 */
   readonly cards: string;
   readonly row: string;
-  /** 比开局策略多准时或少准时几单。订单不多于运力、两套策略准时单数相同时写一句说明。 */
+  /** 比开局策略多准时或少准时几单，差不为 0 而小于门槛时句末加「差别不明显」。订单不多于运力、两套策略准时单数相同时写一句说明。 */
   readonly gain: string;
-  /** 比开局策略多准时的纪录，只在多准时的时候写。 */
+  /** 比开局策略多准时的纪录，只在多准时并且句末没有加「差别不明显」的时候写。 */
   readonly record: RecordNote | null;
   /** 开局策略下各片区的准时率，没有目标和达标。 */
   readonly districts: readonly SummaryDistrictLine[];
@@ -109,6 +125,8 @@ export interface SummaryView {
   /** 没有送达的订单时没有四段时间。 */
   readonly timeHeader: string;
   readonly segments: readonly SegmentItem[] | null;
+  /** 机队时间构成，写在四段时间下面。没有无人机，或者是存档格式 3 以前的记录时为 null。 */
+  readonly fleet: FleetBlock | null;
   /** 这一场没有对照时为 null。 */
   readonly compare: CompareBlock | null;
   /** 说明：主句，加最多一条附加句。 */
@@ -158,6 +176,23 @@ function segmentItems(segments: PeakSegments, main: MainSentence): SegmentItem[]
   ];
 }
 
+/** 机队时间构成的五段，按载货飞行、空载飞行、作业、排队、停放的顺序。 */
+const FLEET_ORDER = ['loaded', 'empty', 'work', 'queue', 'parked'] as const;
+
+/**
+ * 机队时间构成：标题和五段。最长的一段（并列时取靠前的）带 longest 标记。没有构成时为 null。
+ * 一场高峰的小结和一座站的小卡都用它，数取自核心记录里的 PeakFleet。
+ */
+export function fleetBlock(fleet: PeakFleet | null): FleetBlock | null {
+  if (fleet === null) return null;
+  let longest: keyof PeakFleet = FLEET_ORDER[0];
+  for (const id of FLEET_ORDER) if (fleet[id] > fleet[longest]) longest = id;
+  return {
+    header: STR.summary.fleetHeader,
+    items: FLEET_ORDER.map((id) => ({ id, text: fmt(STR.summary.fleet[id], { share: fleet[id] }), share: fleet[id], longest: id === longest })),
+  };
+}
+
 /** 开局策略用的两张卡的名称，取自开局的配置。 */
 function openingCards(): string {
   const { select, zone } = DEFAULT_CONFIG.rules;
@@ -168,23 +203,35 @@ function openingCards(): string {
 }
 
 /**
+ * 小结对照里写「差别不明显」的门槛：来单数的平方根乘内容表里的系数，向上取整。orders 是这一场小结记录里的来单。
+ * 准时单数的差不为 0，并且绝对值小于它，就照写差几单，句末加「差别不明显」。
+ * 单场的差的标准差约与来单数的平方根成正比（多套订单序列的模拟里约为 0.5 × √来单数），来单多的场次里，同样的差更可能只来自订单的随机。
+ */
+export function compareThreshold(orders: number): number {
+  return Math.ceil(GOALS_V1.compareUnclearK * Math.sqrt(orders));
+}
+
+/**
  * 小结里与开局策略的对照。这一场没有对照时为 null。
- * 比开局策略多准时或少准时几单。两套策略准时的单数相同时，订单不多于运力就写一句说明，否则写相同。
+ * 比开局策略多准时或少准时几单，差的绝对值小于 compareThreshold(来单数) 时句末加「差别不明显」。
+ * 两套策略准时的单数相同时，订单不多于运力就写一句说明，否则写相同。
+ * 多准时的纪录小字只在句末没有加「差别不明显」时写：差别不明显的多准时不算纪录。核心里的纪录（peakStanding）不变，只是这里不显示。
  */
 export function compareBlock(record: PeakRecord, standing: PeakStanding | null): CompareBlock | null {
   const baseline: PeakBaseline | null = record.baseline;
   if (baseline === null) return null;
   const gain = record.onTime - baseline.onTime;
+  const unclear = gain !== 0 && Math.abs(gain) < compareThreshold(record.orders);
   let text: string;
-  if (gain > 0) text = fmt(STR.metrics.compare.more, { count: gain });
-  else if (gain < 0) text = fmt(STR.metrics.compare.less, { count: -gain });
+  if (gain > 0) text = fmt(unclear ? STR.metrics.compare.moreUnclear : STR.metrics.compare.more, { count: gain });
+  else if (gain < 0) text = fmt(unclear ? STR.metrics.compare.lessUnclear : STR.metrics.compare.less, { count: -gain });
   else text = baseline.lowLoad ? STR.metrics.compare.lowLoad : STR.metrics.compare.same;
   return {
     header: STR.metrics.compare.header,
     cards: openingCards(),
     row: fmt(STR.metrics.compare.row, { onTime: baseline.onTime, cancelled: baseline.cancelled, revenue: wholeMoney(baseline.revenue) }),
     gain: text,
-    record: gain > 0 ? recordNote(standing?.gain ?? null) : null,
+    record: gain > 0 && !unclear ? recordNote(standing?.gain ?? null) : null,
     districts: baseline.districts.map((d) => ({ ...rateLine(d.district, d.n, d.pct), goal: null, mark: null })),
   };
 }
@@ -212,10 +259,14 @@ export function mainSentence(main: MainSentence): string {
 /** 说明的附加句。站号是核心里的编号加一，写成汉字。 */
 export function extraSentence(extra: ExtraSentence): string {
   switch (extra.id) {
+    case 'takeoffWait':
+      return fmt(STR.summary.extra.takeoffWait, { station: stationNumeral(extra.station + 1), percent: extra.percent });
     case 'landQueue':
       return fmt(STR.summary.extra.landQueue, { station: stationNumeral(extra.station + 1), count: extra.count });
     case 'bayIdle':
       return fmt(STR.summary.extra.bayIdle, { station: stationNumeral(extra.station + 1), percent: extra.percent });
+    case 'emptyFlight':
+      return fmt(STR.summary.extra.emptyFlight, { percent: extra.percent });
     case 'notNearest':
       return fmt(STR.summary.extra.notNearest, { percent: extra.percent });
     case 'districtLow':
@@ -246,6 +297,7 @@ export function summaryTicket(record: PeakRecord, index: number, hasBoard: boole
     streak: record.cleared === null || standing === null || standing.streak.best === 0 ? null : fmt(STR.metrics.summary.streak, { now: standing.streak.now, best: standing.streak.best }),
     timeHeader: STR.summary.timeHeader,
     segments: record.segments === null ? null : segmentItems(record.segments, record.main),
+    fleet: fleetBlock(record.fleet),
     compare: compareBlock(record, standing),
     sentences,
     openBoard: hasBoard ? STR.summary.actions.openBoard : null,
@@ -272,6 +324,8 @@ export interface DayEndView {
   readonly rows: readonly TicketRow[];
   /** 各片区的一行，升星的片区后面跟着新店的几行。 */
   readonly lines: readonly string[];
+  /** 效果记录：购买改装之后的几次日结里，每笔购买一条，每条两句：先写改装的名称，再写这项改装对应的指标现在的数值和不购买时的数值。接在星级的几行后面，没有时为空。 */
+  readonly effects: readonly string[];
   /** 今天达标的场数，和累计比开局策略多准时或少准时的单数。没有可写的时候为空。 */
   readonly metrics: readonly string[];
   readonly next: string;
@@ -306,6 +360,44 @@ export function dayLines(line: DayDistrictRecord): string[] {
   }
 }
 
+/** 保留一位小数。不是有限数时按 0 写，免得小票和小卡上出现 NaN。 */
+export function oneDecimal(value: number): string {
+  return (Number.isFinite(value) ? value : 0).toFixed(1);
+}
+
+/**
+ * 效果记录里的一句，文字取词表 dayEnd.effect 里与 kind 同名的一条，写现在的数（after）和不购买时的数（twin），购买前的数不写。
+ * 起降排队的秒数和每趟单数保留一位小数，回站飞行的百分数取整数，起降口一句的站号是核心里的编号加一，写成汉字。
+ * 起降口一句缺站号或等级时（核心不会这样记）不写，返回 null。
+ */
+export function effectText(line: EffectLine): string | null {
+  switch (line.kind) {
+    case 'gate':
+      if (line.station === null || line.level === null) return null;
+      return fmt(STR.dayEnd.effect.gate, { station: stationNumeral(line.station + 1), level: line.level, after: oneDecimal(line.after), twin: oneDecimal(line.twin) });
+    case 'doubleBox':
+      return fmt(STR.dayEnd.effect.doubleBox, { after: oneDecimal(line.after), twin: oneDecimal(line.twin) });
+    case 'nearest':
+      return fmt(STR.dayEnd.effect.nearest, { after: Math.round(line.after), twin: Math.round(line.twin) });
+  }
+}
+
+/**
+ * 一句话按句号分成几句，句号留在句尾。效果记录每笔两句：改装的名称，现在的数和不购买时的数。日结小票很窄，一笔排不进一行，
+ * 按句分行，不让一句话在数和单位中间折断。句号写成转义，代码里不出现中文标点。
+ */
+export function sentenceLines(text: string): string[] {
+  return text.split(/(?<=\u3002)/u).filter((part) => part !== '');
+}
+
+/** 一次日结的效果记录，按购买的先后。 */
+export function effectLines(lines: readonly EffectLine[]): string[] {
+  return lines.flatMap((line) => {
+    const text = effectText(line);
+    return text === null ? [] : [text];
+  });
+}
+
 /** 累计比开局策略多准时或少准时的单数那一句。没有对照过，或者多少相抵为 0 时为 null。 */
 export function gainTotalLine(total: number, peaks: number): string | null {
   if (peaks === 0 || total === 0) return null;
@@ -335,6 +427,7 @@ export function dayEndTicket(record: DayRecord, index: number, income: Standing 
       row(STR.dayEnd.rows.revenue, money(record.income), false, recordNote(income, true)),
     ],
     lines: record.districts.flatMap(dayLines),
+    effects: effectLines(record.effects),
     metrics,
     next: STR.summary.actions.next,
   };

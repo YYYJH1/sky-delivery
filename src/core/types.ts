@@ -35,7 +35,7 @@ export interface SimConfig {
   rules: RuleSet; // 开局的规则
   orderEndStep: number | null; // 这一步及之后不再产生订单，null 表示一直产生
   mode: GameMode; // 经营模式用地图 v1 和内容表，场景、布局、地图种子、飞机数、来单率、起降间隔都不起作用
-  returnRule: ReturnRule; // 开局的飞完回哪的规则，经营模式里买了就近降落之后改变
+  returnRule: ReturnRule; // 开局的飞完回哪的规则，经营模式里买了就近降落或切换开关之后，现在的规则在 state.returnRule 里
 }
 
 // ---- 地图 ----
@@ -208,7 +208,8 @@ export interface DistrictRating {
 /**
  * 会逐步开放的东西。每一项在 campaign.unlocks 里记下开放的那一步，-1 表示还没开放。已经开放的不会再锁上。
  * selectColumn：「调度策略」一栏，带「时限优先」。priceTags：价签，也就是建站、添飞机、加停机位、起降口升级、双层货箱、就近降落。
- * doubleBox：双层货箱出现在改装里。poolColumn：「合单策略」一栏，买下双层货箱时开放。zoneColumn：「协同策略」一栏，三张卡同时开放。
+ * doubleBox：双层货箱出现在改装里，随价签一起开放。dataClerk：数据员到岗，提供推演，也随价签一起开放。
+ * poolColumn：「合单策略」一栏，买下双层货箱时开放。zoneColumn：「协同策略」一栏，三张卡同时开放。
  * nearestLanding：就近降落，要有两座以上的站。ruleSets：午晚两套策略，开通写字楼区时开放。
  * prioDistrict：三张「片区优先」。roundtrip：「短程优先」。showOffice、showCampus：显示写字楼区、大学城和它们的开通价格。
  */
@@ -216,6 +217,7 @@ export type UnlockKey =
   | 'selectColumn'
   | 'priceTags'
   | 'doubleBox'
+  | 'dataClerk'
   | 'poolColumn'
   | 'zoneColumn'
   | 'nearestLanding'
@@ -278,6 +280,16 @@ export interface DayRecord {
   districts: DayDistrictRecord[]; // 每个开通的片区一行，按片区编号
   peaksJudged: number; // 今天的高峰里判过目标的场数：至少有一个片区设了线，并且这个片区的订单够判的下限
   peaksCleared: number; // 其中全部达标、并且没有退单的场数
+  /**
+   * 运力占用：一天按时刻分 24 段，每段 150 步（15 秒），共 24 个整数。第 i 段是占用的无人机占全部无人机的百分数，下取整，
+   * 占用指不是停放，或者停放但电量没有充满、正在充电。这一段没有无人机时为 0。存档格式 3 以前的记录为 null
+   */
+  busy: number[] | null;
+  /**
+   * 效果：购买改装之后的几次日结里，每笔购买一行，写这项改装对应的指标现在的数值和不购买时的数值（见 effects.ts）。
+   * 购买前的数值、现在的数值或副本的数值没有的那一天不写这一行。存档格式 3 以前的记录为空
+   */
+  effects: EffectLine[];
 }
 
 /** 高峰小结说明的主句。id 对应词表 summary.main 的键，参数名与词表一致。 */
@@ -290,10 +302,15 @@ export type MainSentence =
   | { id: 'road' }
   | { id: 'waitPrep' };
 
-/** 高峰小结说明的附加句。id 对应词表 summary.extra 的键。station 是站的编号（n 号站是编号加一），district 是片区编号。 */
+/**
+ * 高峰小结说明的附加句。id 对应词表 summary.extra 的键，顺序就是选句的条件表的顺序（见 summary.ts 的 pickExtra）。
+ * station 是站的编号（n 号站是编号加一），district 是片区编号，percent 是下取整的百分数。
+ */
 export type ExtraSentence =
+  | { id: 'takeoffWait'; station: number; percent: number }
   | { id: 'landQueue'; station: number; count: number }
   | { id: 'bayIdle'; station: number; percent: number }
+  | { id: 'emptyFlight'; percent: number }
   | { id: 'notNearest'; percent: number }
   | { id: 'districtLow'; district: number; onTime: number };
 
@@ -338,6 +355,20 @@ export interface PeakSegments {
   road: number;
 }
 
+/** 机队时间构成：一场高峰里无人机的时间在五段之间的分配，五个整数加起来是 100。work 包括等待出餐。 */
+export interface PeakFleet { loaded: number; empty: number; work: number; queue: number; parked: number }
+
+/** 小结里一座站点的一行。 */
+export interface PeakStationRow {
+  station: number;
+  gateWait: number | null; // 这一场已送达、从这座站起飞的订单的平均起降排队秒数（order.gateWait 换成秒），没有这样的订单为 null
+  landWaitAvg: number; // 平均等待降落的架数，口径与现在 peakSummary 里的 landWaitAvg 相同
+  takeoffWaitPct: number; // 至少有 1 架无人机等待起飞的时间占这一场的百分数，下取整
+  queuePct: number; // 至少有 1 架无人机排队的时间占这一场的百分数，下取整
+  sorties: number; // 这一场从这座站放行起飞的架次
+  fleet: PeakFleet | null; // 归属这座站的无人机的机队时间构成，没有无人机时为 null
+}
+
 /** 一场高峰小结的记录，在小结时刻（summaryStep）生成。 */
 export interface PeakRecord {
   day: number;
@@ -358,6 +389,14 @@ export interface PeakRecord {
   extra: ExtraSentence | null;
   cleared: boolean | null; // 判过的片区全部达标，并且这一场没有退单。没有判过的片区为 null
   baseline: PeakBaseline | null; // 小结的对照。这一场没有对照（整场用的是开局的卡，或者开局时没有复制状态）为 null
+  fleet: PeakFleet | null; // 全部没有退回的站合计的机队时间构成，没有无人机时为 null。存档格式 3 以前的记录为 null
+  /**
+   * 全部没有退回的站合计，回站飞行（飞行并且在回站）占全部无人机「架·步」数的百分数，下取整。分母与 fleet 的五段相同。
+   * 回站飞行是空载飞行的一部分，不含去店铺取餐的飞行，所以不大于 fleet.empty。没有无人机时为 null，与 fleet 同时为 null。
+   * 存档格式 3 以前的记录为 null。就近降落的效果记录取这一项。
+   */
+  fleetBack: number | null;
+  stations: PeakStationRow[]; // 没有退回的站，一站一行，按编号排。存档格式 3 以前的记录为空
 }
 
 /**
@@ -392,6 +431,7 @@ export type TipId =
   | 'firstRedOrder'
   | 'boardReady'
   | 'canAddBay'
+  | 'dataClerk'
   | 'gateBusy'
   | 'openOffice';
 
@@ -420,6 +460,98 @@ export interface AwayRecord {
   amount: number; // 加进余额的钱，向下取整的整数
 }
 
+// ---- 经营模式：机队时间和排队的计数 ----
+// 只在经营模式里累计，进状态哈希，随存档保存。只保留当场高峰和当天的累计，不按秒存历史：
+// 小结时刻读出当场高峰的计数写进小结记录，日结时读出当天的计数写进日结记录，读完清零。
+
+/**
+ * 当场高峰的计数。在高峰窗口（peakWindow，午、晚两场的下单时段）内每一步累加。
+ * 数组按站的编号下标，新建的站从建成之后的第一步起补上，已退回的站的计数留着，写小结时不读。
+ */
+export interface PeakTally {
+  steps: number; // 计数覆盖的步数，也就是这一场高峰里已经累加过的步数
+  /** 按无人机的归属站（home）累计各类的「架·步」数。每座站一行，五项依次是：载货飞行、空载飞行、作业（含等待出餐）、排队、停放。 */
+  fleet: number[][];
+  /** 按无人机的归属站（home）累计回站飞行（飞行并且在回站）的「架·步」数，每座站一项。已经算在 fleet 的空载飞行里，这里另计一份，五类的数不变。 */
+  back: number[];
+  takeoffWait: number[]; // 按无人机所在的站（station）：至少有 1 架无人机等待起飞的步数
+  queue: number[]; // 按无人机所在的站：至少有 1 架无人机排队的步数，排队包括等待起飞和等待降落
+  sorties: number[]; // 从这座站放行起飞的架次
+}
+
+/** 当天的计数：一天按时刻分 24 段，每段 150 步（15 秒），第 i 段是天内的第 150i 到 150i + 149 步。 */
+export interface DayTally {
+  drones: number[]; // 每段里全部没有退回的无人机的「架·步」数
+  used: number[]; // 其中占用的：不是停放，或者停放但电量没有充满、正在充电
+}
+
+export interface FleetTally {
+  peak: PeakTally;
+  day: DayTally;
+}
+
+// ---- 经营模式：推演次数和效果记录 ----
+// 都在 state.campaign 里，进状态哈希，随存档保存。两项都只记录，不影响派单和任何决定。
+
+/** 数据员的推演次数。推演本身（复制状态、换订单序列、运行）在应用层，结果不写进状态。 */
+export interface ForecastState {
+  /** 还剩几次。每场高峰的小结生成时加内容表 FORECAST_V1.chargesPerPeak 次，最多到 FORECAST_V1.maxCharges，用 useForecast 命令扣 1 次 */
+  charges: number;
+}
+
+/**
+ * 购买后写效果的三种改装，各自对应一个指标：
+ * gate 起降口升级：这座站的起降排队秒数（PeakStationRow.gateWait）；
+ * doubleBox 双层货箱：全场每趟单数，即这一场已送达的订单数（onTime 加 late 减 lateOpen）除以各站 sorties 的合计，合计为 0 时没有这项数据；
+ * nearest 就近降落：全场回站飞行占机队时间的百分数（PeakRecord.fleetBack），只算送完单回站的飞行，不含去店铺取餐的飞行。
+ * 就近降落的开关、买无人机、加停机位和建站不记。
+ */
+export type EffectKind = 'gate' | 'doubleBox' | 'nearest';
+
+/**
+ * 副本（不购买的一份）在某一场高峰里这项改装的指标。副本由会话层持有（src/app/twins.ts），不在状态里；
+ * 这里只记它每场高峰算出的数，由会话层在主状态和副本都生成了这一场的小结之后记下（effects.ts 的 recordTwin）。
+ */
+export interface EffectTwin {
+  day: number; // 这一场高峰的游戏日
+  peak: PeakName; // 午高峰还是晚高峰
+  value: number; // 副本这一场的指标，原始的数，单位与 EffectLine.after 相同
+}
+
+/**
+ * 一笔购买的效果跟踪：购买成功时记下，购买之后的 FORECAST_V1.effectDays 次日结里各写一行（DayRecord.effects），写完之后删掉。
+ * 购买前的数值取购买时最近一场小结记录，同时记下那一场是午高峰还是晚高峰：之后「现在的数值」取日结时最近一场同类的小结记录，
+ * 必须晚于购买前的那一场。每一行还要有「不购买时」的数：它取自副本在同一场高峰里的数（twins）。
+ */
+export interface EffectWatch {
+  kind: EffectKind;
+  step: number; // 购买成功的步
+  station: number | null; // gate 的站编号，其余为 null
+  level: number | null; // gate 升到的等级，其余为 null
+  peak: PeakName | null; // 购买前取数的那一场是午高峰还是晚高峰，购买时还没有小结记录为 null
+  beforeDay: number | null; // 那一场的游戏日，购买时还没有小结记录为 null
+  before: number | null; // 购买前的数值：原始的数，没有小结记录或者记录里没有这项数据为 null
+  left: number; // 还要经过几次日结。每次日结减 1，减到 0 时这条记录删掉
+  /** 副本记下的数，按先后排。没有副本（读档之后，副本作废或被挤掉）时不再增加，这一天就写不出这一行 */
+  twins: EffectTwin[];
+}
+
+/**
+ * 日结里的一行效果：这项改装对应的指标，现在的数和不购买时的数。两个数都有才写，所以都不是 null。
+ * 数是原始的数，界面里秒数和单数保留一位小数，百分数取整数。购买前的数 before 留在记录里，界面不显示：购买前后相隔几天，订单量和随机波动盖过了改装的作用。
+ */
+export interface EffectLine {
+  kind: EffectKind;
+  station: number | null; // gate 的站编号（n 号站是编号加一），其余为 null
+  level: number | null; // gate 升到的等级，其余为 null
+  peak: PeakName; // 现在的数取自哪一类高峰
+  beforeDay: number; // 购买前的数值取自哪一天的这场高峰
+  afterDay: number; // 现在的数值取自哪一天的这场高峰，晚于 beforeDay。副本的数取自同一场
+  before: number; // 购买前的数值。gate 是秒，doubleBox 是单数，nearest 是百分数
+  after: number; // 现在的数值，单位同上
+  twin: number; // 不购买时同一场的数值，单位同上
+}
+
 export interface CampaignState {
   contentVersion: number; // 内容表的版本号，存档只记它，不记内容本身
   money: number; // 余额
@@ -445,6 +577,11 @@ export interface CampaignState {
   goals: PeakGoals | null; // 最近一场高峰的目标，还没有过高峰时为 null。小结生成时按它给各片区一行写达没达标
   // 以下是离开结算的字段
   away: AwayRecord[]; // 离开结算的记录，按结算的先后，最多留最近的 100 条
+  // 以下是存档格式 4 加的字段
+  nearestOwned: boolean; // 买下了就近降落。买下之后可以随时免费开关，开关的结果在 state.returnRule 里。开局的配置里已经是 nearest 时从一开始就是 true
+  tally: FleetTally; // 机队时间和排队的计数，只读状态累计，不影响任何决定
+  forecast: ForecastState; // 推演次数，只记录，推演本身在应用层算
+  effectWatches: EffectWatch[]; // 购买改装之后还在跟踪效果的记录，只读小结记录和会话层交来的副本的数，不影响任何决定
 }
 
 export interface SimState {
@@ -454,7 +591,7 @@ export interface SimState {
   rng: { orders: RngState; dispatch: RngState };
   rules: RuleSet;
   capacity: number; // 载量（份）。沙盒取配置的值，经营模式里买了双层货箱之后改变
-  returnRule: ReturnRule; // 飞完回哪。沙盒取配置的值，经营模式里买了就近降落之后改变
+  returnRule: ReturnRule; // 飞完回哪。沙盒取配置的值，经营模式里买下就近降落时变成 nearest，之后用 setNearestLanding 命令在 nearest 和 home 之间切换
   stations: Station[];
   drones: Drone[];
   orders: Order[];

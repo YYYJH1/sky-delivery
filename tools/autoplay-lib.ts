@@ -31,7 +31,8 @@
 //      而且没到屋顶的上限，就在飞机最少的站加一个停机位，下一次决定再添飞机。
 //   丁 屋顶放满之后，在双层货箱、起降口升级、建新站之间选，看最近一场高峰小结的主句：
 //      「订单主要在等飞机」先买双层货箱，再建新站，再升起降口。
-//      「订单主要在等起降口」先升起降口（小结点名的站，没有点名取飞机最多的站），再建新站，再买双层货箱。
+//      「订单主要在等起降口」先升起降口，再建新站，再买双层货箱。升哪座站：小结的附加句点名等待起飞或等待降落的站，
+//      没有点名取上一场小结里有无人机排队的时间占比最大的站，没有各站的记录时取飞机最多的站，都要没到 3 级。
 //      「订单主要花在路上」先建新站，再买双层货箱，再升起降口。其余的主句按双层货箱、新站、起降口的顺序。
 //      新站建在已开通的片区里，优先选还没有站的片区，其次站最少的片区，选址办法同乙。
 //   不买就近降落。它是可以买的改装之一，但这五种玩法的目标是看扩建和换卡的节奏，所以所有玩法都不买它。
@@ -128,7 +129,9 @@ export const NODE_INFO: readonly NodeInfo[] = [
   { id: 'oldStreet3', label: '老街三星', target: [11.5, 12.5], targetText: '约 12' },
   { id: 'officeShown', label: '写字楼区显示', target: [11.5, 12.5], targetText: '约 12' },
   { id: 'secondStation', label: '第二座站建成', target: [15, 20], targetText: '15 到 20' },
-  { id: 'firstChoice', label: '第一个需要比较的购买选择', target: [15, 25], targetText: '15 到 25' },
+  // 双层货箱随价签开放（内容版本 6）以后，价签出现的那一刻（第一天结束，约 6 分钟）就要在双层货箱、加停机位和添飞机之间比较，所以目标取约 6 分钟。
+  // 原来的 15 到 25 分钟对应「第一次在扩建老站和建新站之间选择」，那一刻现在由上面「第二座站建成」一行单独看。
+  { id: 'firstChoice', label: '第一个需要比较的购买选择', target: [5.5, 6.5], targetText: '约 6' },
   { id: 'office3', label: '写字楼区三星', target: [45, 60], targetText: '45 到 60' },
   { id: 'campusShown', label: '大学城显示（写字楼区四星）', target: null, targetText: '' },
   { id: 'campusOpened', label: '大学城开通', target: null, targetText: '' },
@@ -245,6 +248,10 @@ export interface PlayOptions {
   startMoney?: number;
   /** 命令和推进经过 createPlay，每场高峰同时按开局的卡算出对照，写进记录的 shadow 字段。对照只加记录，不改变游戏，也不改变自动玩家的决定。缺省不算 */
   shadow?: boolean;
+  /** 经过 createPlay 时（shadow 为真）是否开效果记录里不购买的副本，缺省不开：只要小结的对照时，不必为每笔购买多推几份状态 */
+  twins?: boolean;
+  /** 经过 createPlay 时两种副本是否用轻量的一步推进，缺省是。只有对照轻量与完整两种推进的核对脚本才传 false */
+  light?: boolean;
   /**
    * 每一步开始时调用，这时脚本还没有做这一步的决定，核心也还没有执行这一步。只读状态，不得修改。
    * 对照两套策略时用它在某一步复制状态。
@@ -353,13 +360,25 @@ function growthCommand(state: SimState, spec: PolicySpec): Command | null {
   return null;
 }
 
-/** 升起降口的站：小结点名等降落的站优先，否则飞机最多的站，都要没到 3 级。 */
-function gateCommand(state: SimState, last: PeakRecord | undefined): Command | null {
+/**
+ * 升起降口的站，都要没到 3 级，按下面的顺序取：
+ * 1 最近一场小结的附加句是「等待起飞」或「等待降落」时，升它点名的站。
+ * 2 否则升最近一场小结各站的行里，至少有 1 架无人机排队的时间占比（queuePct）最大的站，并列取编号小的。
+ * 3 最近一场没有各站的行（没有小结，或者存档格式 3 以前的记录）时，升飞机最多的站，并列取编号小的。
+ * 新规则下「等待起飞」排在「等待降落」前面，「等待降落」很少出现，所以只认「等待降落」时第 1 条几乎不会触发。
+ */
+export function gateCommand(state: SimState, last: PeakRecord | undefined): Command | null {
   const live = liveStations(state).filter((s) => gateLevel(state, s.id) < 3);
   if (live.length === 0) return null;
   const extra = last?.extra ?? null;
-  const named = extra !== null && extra.id === 'landQueue' ? live.find((s) => s.id === extra.station) : undefined;
+  const named = extra !== null && (extra.id === 'takeoffWait' || extra.id === 'landQueue') ? live.find((s) => s.id === extra.station) : undefined;
   if (named !== undefined) return { type: 'upgradeGate', station: named.id };
+  let busiest: { id: number; queuePct: number } | null = null;
+  for (const row of last?.stations ?? []) {
+    if (!live.some((s) => s.id === row.station)) continue;
+    if (busiest === null || row.queuePct > busiest.queuePct || (row.queuePct === busiest.queuePct && row.station < busiest.id)) busiest = { id: row.station, queuePct: row.queuePct };
+  }
+  if (busiest !== null) return { type: 'upgradeGate', station: busiest.id };
   let best = live[0] as Station;
   for (const s of live) if (fleetOf(state, s.id) > fleetOf(state, best.id)) best = s;
   return { type: 'upgradeGate', station: best.id };
@@ -585,8 +604,9 @@ export function playGame(policyId: PolicyId, seed: number, options: PlayOptions 
   const state = createState({ mode: 'campaign', seed });
   const campaign = campaignOf(state);
   campaign.money += options.startMoney ?? 0;
-  // 要对照时，命令和推进都经过 createPlay，由它持有每场高峰的副本。否则直接用核心的函数
-  const play = options.shadow === true ? createPlay(state) : null;
+  // 要对照时，命令和推进都经过 createPlay，由它持有每场高峰的副本。否则直接用核心的函数。
+  // 缺省只要小结的对照，不开效果记录里不购买的副本：它们要多推几份状态，也会往状态里写副本的数
+  const play = options.shadow === true ? createPlay(state, { twins: options.twins ?? false, light: options.light }) : null;
   const run = (command: Command): CommandResult => (play === null ? applyCommand(state, command) : play.command(command));
 
   const purchases: PurchaseRecord[] = [];

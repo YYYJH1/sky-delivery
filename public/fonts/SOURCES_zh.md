@@ -6,10 +6,10 @@
 
 | 文件 | 字体 | 版本 | 大小 |
 |---|---|---|---|
-| sky-serif-bold.woff2 | 思源宋体 Noto Serif SC，取 wght=700 的实例 | 2.003-H1 | 约 42 KB |
-| sky-pixel.woff2 | 缝合像素字体 Fusion Pixel 12px 比例版 zh_hans | 2026.11.10 | 约 21 KB |
-| sky-hand.woff2 | 小赖字体 Xiaolai Regular | 3.126 | 约 97 KB |
-| sky-sans.woff2 | 思源黑体 Noto Sans SC，可变字体，字重轴取 400 到 700 | 2.004-H2 | 约 163 KB |
+| sky-serif-bold.woff2 | 思源宋体 Noto Serif SC，取 wght=700 的实例 | 2.003-H1 | 约 41 KB |
+| sky-pixel.woff2 | 缝合像素字体 Fusion Pixel 12px 比例版 zh_hans | 2026.11.10 | 约 22 KB |
+| sky-hand.woff2 | 小赖字体 Xiaolai Regular | 3.126 | 约 103 KB |
+| sky-sans.woff2 | 思源黑体 Noto Sans SC，可变字体，字重轴取 400 到 700 | 2.004-H2 | 约 170 KB |
 
 CSS 里的名字是 SkySerif、SkyPixel、SkyHand、SkySans，见 fonts.css。
 

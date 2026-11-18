@@ -3,7 +3,7 @@
 // 把部件的点击变成核心的命令。
 // 高峰小结和日结小票的出现、暂停和收起也在这里：核心生成记录，这里发现多了一条，就让界面送出小票。
 // 游戏状态只在这里被读写。部件通过 state.ts 里的 signals 和 actions 与这里通信。
-import { attachBrowser, browserEnv, createPlay, createSession } from '../app/index.ts';
+import { attachBrowser, browserEnv, createPlay, createSession, requestForecast } from '../app/index.ts';
 import { createBrowserAudio } from '../audio/index.ts';
 import type { Attached, BrowserEnv, SaveReport } from '../app/index.ts';
 import { STR, districtName, fmt } from '../content/strings.zh.ts';
@@ -19,9 +19,10 @@ import { ruleCommand } from './board.ts';
 import { boot, formatSavedAt, randomSeed, readImport } from './boot.ts';
 import type { BootNotice } from './boot.ts';
 import { DEBUG_NAMESPACE, applyDebug, forceHolding, padDrones, parseGameParams } from './debug-params.ts';
+import { createForecastFlow } from './forecast-flow.ts';
 import { acquireRunLock } from './lock.ts';
 import type { LockManagerLike } from './lock.ts';
-import { CARD_HEIGHT, CARD_WIDTH, cardPlacement, estimateWidth, layoutRoofLabels, roofLabelFontPx, tooltipPlacement } from './map-layout.ts';
+import { CARD_WIDTH, cardPlacement, estimateWidth, layoutRoofLabels, roofLabelFontPx, tooltipPlacement } from './map-layout.ts';
 import type { PlacedRoofLabel } from './map-layout.ts';
 import { hitTest, pickDistrict, ticketReach } from './map-hit.ts';
 import type { Hit, MapTargets } from './map-hit.ts';
@@ -42,10 +43,12 @@ import {
   boardOpen,
   boardTab,
   buildMode,
+  cardHeight,
   dayEndOpen,
   districtAnchors,
   endingOpen,
   exportCode,
+  forecastSheet,
   importOpen,
   mapFailed,
   menuOpen,
@@ -89,12 +92,16 @@ export interface SkyDebug {
   toScreen(x: number, y: number): { x: number; y: number };
   /** 画出来的店名在窗口里的框，左上角加宽高，带店的序号。 */
   names(): { shop: number; x: number; y: number; w: number; h: number }[];
+  /** 数据员在窗口里的框，中心加宽高，上一帧画出来的。没到岗时为 null。 */
+  clerk(): { x: number; y: number; w: number; h: number } | null;
   /** 地图渲染器的统计：飞机、小票、站、航线的段数，上一帧更新花的毫秒，静态层烘焙了几次和花的毫秒，窗口大小和设备像素比，镜头的缩放，镜头是否在挪动（moving），地图是否画出来了（drawn）。 */
   stats(): Record<string, number>;
   /** 把飞机补到 total 架，平分给各站，只给性能测试用。会改游戏状态。 */
   pad(total: number): number;
   /** 把游戏状态序列化成 JSON，给测试比对用。 */
   json(): string;
+  /** 让游戏往前走 seconds 秒，不经过帧循环，走法与帧循环相同（小结和日结照常出现），返回走到的步数。会改游戏状态。 */
+  advance(seconds: number): number;
   /** 让第一座站上停着的 n 架飞机回到站点上空排队等降落，看等降落的画法用。会改游戏状态。 */
   hold(n: number): number;
   /** 存档用的是哪种存储：indexeddb、localstorage 或 none。 */
@@ -270,6 +277,20 @@ export async function startGame(els: GameElements, search: string): Promise<void
 
   // 推进状态和执行命令都经过 play：高峰里它另外持有一份按开局的卡运行的副本，小结里写与开局策略的对照
   const play = createPlay(game);
+  /** 推进几步：每一步都经过 play，最后一步的前后两个位置记下来给画面插值。帧循环和调试入口都用它。 */
+  function advanceSteps(steps: number): void {
+    for (let i = 0; i < steps; i++) {
+      // 只有最后一步的前后两个位置用来插值，前面的步不用记
+      if (i === steps - 1) {
+        prevX = game.drones.map((d) => d.x);
+        prevY = game.drones.map((d) => d.y);
+      }
+      play.step();
+      mapView.recordStep(game);
+    }
+    refreshRanks();
+    checkNotices();
+  }
   const session = createSession({
     store,
     savedStep: booted.savedStep,
@@ -277,19 +298,7 @@ export async function startGame(els: GameElements, search: string): Promise<void
     loop: { paused: params.pause },
     host: {
       state: () => game,
-      advance(steps) {
-        for (let i = 0; i < steps; i++) {
-          // 只有最后一步的前后两个位置用来插值，前面的步不用记
-          if (i === steps - 1) {
-            prevX = game.drones.map((d) => d.x);
-            prevY = game.drones.map((d) => d.y);
-          }
-          play.step();
-          mapView.recordStep(game);
-        }
-        refreshRanks();
-        checkNotices();
-      },
+      advance: advanceSteps,
       // 网页不可见超过一分钟，回来时结算离开期间的进账。核心只管算，界面这里提示
       away(seconds) {
         const record = settleAway(game, seconds);
@@ -418,11 +427,15 @@ export async function startGame(els: GameElements, search: string): Promise<void
   };
 
   actions.clickUpgrade = (item) => {
-    if (item.click.kind === 'hint') {
-      showToast(hintText(item.click.hint));
+    const click = item.click;
+    if (click.kind === 'none') return; // 起降口 3 级在这座站还没到 2 级时，这一行不能点
+    if (click.kind === 'hint') {
+      showToast(hintText(click.hint));
       return;
     }
-    execute(item.click.command);
+    // 命令带着成功之后的提示时（切换就近降落的开关）才显示，买东西不另外提示
+    const result = execute(click.command);
+    if (result.ok && click.done !== undefined) showToast(click.done);
   };
 
   actions.clickRefund = () => {
@@ -436,6 +449,33 @@ export async function startGame(els: GameElements, search: string): Promise<void
     showToast(fmt(STR.system.refunded, { refund: quote.price }));
     if (card.refund.what === 'station') selected.value = null;
   };
+
+  // ---- 数据员的推演 ----
+  // 点「推演」时用应用层的 requestForecast 在后台线程里算，出了结果才执行 useForecast 命令扣一次次数（forecast-flow.ts）。
+  // 命令经过 play，和别的命令一样记一次改变。不用 execute：扣次数失败的原因写在推演单上，不另外弹提示
+  const useForecast: Command = { type: 'useForecast' };
+  const forecast = createForecastFlow({
+    state: () => game,
+    request: requestForecast,
+    refuse: () => {
+      const quote = quoteCommand(game, useForecast);
+      if (quote.ok) return null;
+      const reason = quote.reason ?? 'unknownCommand';
+      return failureText(reason, failureContext(game, useForecast, reason));
+    },
+    charge: () => {
+      const result = play.command(useForecast);
+      if (!result.ok) return failureText(result.reason, failureContext(game, useForecast, result.reason));
+      session.noteChange();
+      return null;
+    },
+    show: (sheet) => {
+      forecastSheet.value = sheet;
+    },
+    toast: showToast,
+  });
+  actions.clickForecast = (option, host) => forecast.click(option, host);
+  actions.closeForecast = () => forecast.close();
 
   // ---- 运行状态：暂停、速度、菜单 ----
   function syncRun(): void {
@@ -759,9 +799,10 @@ export async function startGame(els: GameElements, search: string): Promise<void
     const at = anchor.peek();
     if (selected.peek() !== null && at !== null && !building) {
       const view = windowView.peek();
-      const place = cardPlacement(at, view.width, view.height, view.scale);
+      const height = cardHeight.peek();
+      const place = cardPlacement(at, view.width, view.height, view.scale, height);
       const w = CARD_WIDTH * view.scale;
-      reserved.push({ x: place.flip ? place.left - w : place.left, y: place.top, w, h: CARD_HEIGHT * view.scale });
+      reserved.push({ x: place.flip ? place.left - w : place.left, y: place.top, w, h: height * view.scale });
     }
     // 小票的位置是上一帧画出来的，鼠标和它差一帧，看不出来
     const hover: Hit | null = pointer === null ? null : hitTest(surface, targets, pointer.x, pointer.y, building, ticketReach(surface.camera));
@@ -853,11 +894,12 @@ export async function startGame(els: GameElements, search: string): Promise<void
     }
   });
 
-  /** 右键和 Esc：一层一层取消，菜单，日结和小结（等于点「继续」），选片区，选屋顶，改装面板，调度台，选中的站。 */
+  /** 右键和 Esc：一层一层取消，菜单，日结和小结（等于点「继续」），推演单，选片区，选屋顶，改装面板，调度台，选中的站。 */
   function cancelOne(): void {
     if (menuOpen.peek()) actions.closeMenu();
     else if (dayEndOpen.peek()) actions.clickDayEndContinue();
     else if (summaryPhase.peek() === 'open') actions.clickSummaryContinue();
+    else if (forecastSheet.peek() !== null) actions.closeForecast();
     else if (pickingDistrict.peek()) pickingDistrict.value = false;
     else if (buildMode.peek()) cancelBuild();
     else if (upgradesOpen.peek()) upgradesOpen.value = false;
@@ -936,6 +978,13 @@ export async function startGame(els: GameElements, search: string): Promise<void
           const z = boardToScreen(mapView.camera(), b.x + b.w, b.y + b.h);
           return { shop: b.shop, x: a.x, y: a.y, w: z.x - a.x, h: z.y - a.y };
         }),
+      clerk: () => {
+        const b = mapView.clerkBoxes()[0];
+        if (b === undefined) return null;
+        const a = boardToScreen(mapView.camera(), b.x, b.y);
+        const z = boardToScreen(mapView.camera(), b.x + b.w, b.y + b.h);
+        return { x: (a.x + z.x) / 2, y: (a.y + z.y) / 2, w: z.x - a.x, h: z.y - a.y };
+      },
       stats: () => ({ ...mapView.stats(), width, height, dpr, scale: mapView.camera().scale, moving: mapView.moving() ? 1 : 0, drawn: mapView.drawn ? 1 : 0, cityMs: mapView.boot.cityMs, createMs: mapView.boot.createMs }),
       pad: (total) => {
         play.drop(); // 副本里没有这些飞机，这一场不再对照
@@ -944,6 +993,11 @@ export async function startGame(els: GameElements, search: string): Promise<void
         return added;
       },
       json: () => JSON.stringify(game),
+      advance: (seconds) => {
+        advanceSteps(Math.max(0, Math.round(seconds * 10)));
+        session.noteChange();
+        return game.step;
+      },
       hold: (n) => {
         play.drop();
         const done = forceHolding(game, n);

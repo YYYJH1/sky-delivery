@@ -1,10 +1,11 @@
-// 会动的东西和店、站点的画法：飞机、订单小票、票杆和雨棚、站点屋顶、停机位、风向袋、送餐目的地、送达和退单的记号。
+// 会动的东西和店、站点的画法：飞机、订单小票、票杆和雨棚、站点屋顶、停机位、风向袋、起降口的环、送餐目的地、送达和退单的记号。
 // 每个函数画在局部坐标的原点附近，调用者负责平移和旋转。
 // 物件的纹理在启动时画一次（textures.ts），运行时只是精灵。
 import { BASE_COLORS } from '../../content/palette.ts';
 import { withAlpha } from '../look.ts';
 import type { Theme } from '../look.ts';
-import { landingCircle } from '../layout.ts';
+import { GATE_BEAD, GATE_LINE, GATE_REST, gateOuter, gateRings, landingCircle } from '../layout.ts';
+import type { GateArt } from '../layout.ts';
 import { circle, fillWith, polyline, rect, roundRect, strokeLine, strokeWith } from './ctx.ts';
 import type { Ctx } from './ctx.ts';
 
@@ -367,6 +368,24 @@ export function drawSlot(ctx: Ctx, theme: Theme, size: number): void {
   strokeWith(ctx, theme.pal.paper, 1.5, 1, 'round');
 }
 
+// ---- 起降口的环 ----
+/**
+ * 起降口的环，圆心在屋顶上带站号的起降圈的圆心：一级只有起降圈本身，每升一级，在起降圈外面多一道纸白的环，和起降圈、停机位的角标同一种线。
+ * 最外一道环上有一个小圆点，纸白填充，蓝黑描边，整个环转起来就看得出转动。小圆点停在偏右上 45° 的位置，避开起降圈的四个刻线。
+ * 起降圈本身画在屋顶上，这里不画。原点在圆心。
+ */
+export function drawGate(ctx: Ctx, theme: Theme, art: GateArt): void {
+  const { pal } = theme;
+  for (const r of gateRings(art.pad, art.level, art.unit)) {
+    circle(ctx, 0, 0, r);
+    strokeWith(ctx, pal.paper, GATE_LINE * art.unit);
+  }
+  const r = gateOuter(art.pad, art.level, art.unit);
+  circle(ctx, r * Math.sin(GATE_REST), -r * Math.cos(GATE_REST), GATE_BEAD * art.unit);
+  fillWith(ctx, pal.paper);
+  strokeWith(ctx, pal.ink, 0.9 * art.unit);
+}
+
 // ---- 送餐目的地、送达和退单的记号 ----
 /** 屋顶上的接收垫：纸白方块，蓝黑描边，中间一个十字。active 时外面多一圈虚线。原点在中心。 */
 export function drawDestination(ctx: Ctx, theme: Theme, active: boolean): void {
@@ -411,3 +430,43 @@ export function drawLateMark(ctx: Ctx, theme: Theme): void {
   strokeLine(ctx, -3.4, 0, 3.4, 0, pal.red, 2, 1, 'round');
 }
 
+// ---- 数据员 ----
+/**
+ * 站点屋顶上的数据员：一个站着的人，头在上，身体在下，脸朝屋顶下方（局部 +y），与屋顶一起转。
+ * 头是纸白的圆，蓝黑描边，身体是蓝黑的一块，下面两条腿，身前捧着一块纸白的记事板，板上两道线。
+ * 外面一圈纸白的衬边，和飞机一样，压在站点颜色的屋顶上也看得清。
+ * 头在上、身体在下的轮廓缩到最小的镜头缩放下（十来个像素高）仍然认得出是个人，所以不画成俯视的肩膀和头顶。
+ * 原点在人的中心，16 像素高、11 像素宽（layout.ts 的 CLERK_HEIGHT 和 CLERK_WIDTH）。
+ */
+export function drawClerk(ctx: Ctx, theme: Theme): void {
+  const { pal } = theme;
+  const ink = pal.ink;
+  const paper = pal.paper;
+  const head = (): void => circle(ctx, 0, -5.2, 2.7);
+  const torso = (): void => roundRect(ctx, -4.4, -2, 8.8, 7.4, 2.2);
+  const legs = (): void => {
+    rect(ctx, -3.2, 5, 2.8, 3);
+    rect(ctx, 0.4, 5, 2.8, 3);
+  };
+  // 衬边：每一部分都用纸白向外描一圈
+  const casing = 1.3;
+  ctx.lineJoin = 'round';
+  for (const part of [head, torso, legs]) {
+    part();
+    fillWith(ctx, paper);
+    strokeWith(ctx, paper, 2 * casing, 1, 'round');
+  }
+  // 人：身体和腿蓝黑，头纸白，蓝黑描边，身前一块纸白的记事板，板上两道线
+  torso();
+  fillWith(ctx, ink);
+  legs();
+  fillWith(ctx, ink);
+  rect(ctx, -2.7, 0.1, 5.4, 4.4);
+  fillWith(ctx, paper);
+  strokeWith(ctx, ink, 0.8);
+  strokeLine(ctx, -1.5, 1.6, 1.5, 1.6, ink, 0.7, 0.75);
+  strokeLine(ctx, -1.5, 3, 1.5, 3, ink, 0.7, 0.75);
+  head();
+  fillWith(ctx, paper);
+  strokeWith(ctx, ink, 1);
+}

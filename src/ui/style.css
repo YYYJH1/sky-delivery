@@ -341,8 +341,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 刻度和带的画布放在一个定位的盒子里：悬停说明和它的感应区按盒子摆。画布允许画出盒子外面，带的起点写的小字在盒子左边 */
+.ruler-box {
+  position: relative;
+}
+
 .ruler {
   display: block;
+  overflow: visible;
 }
 
 .hatch-line {
@@ -383,6 +389,52 @@ body {
 
 .now-mark {
   fill: var(--ink);
+}
+
+/* 运力占用带：时间轴下面一条细带，24 格，涂的深浅是不透明度（行内写，颜色只有蓝黑一种），格与格之间一道纸白的细缝 */
+.busy-cell {
+  fill: var(--ink);
+  stroke: var(--paper);
+  stroke-width: 0.8;
+}
+
+.busy-frame {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1;
+  stroke-opacity: 0.45;
+}
+
+.busy-label {
+  font-size: 12px;
+  fill: var(--ink);
+}
+
+/* 带和带起点的小字上面盖一层感应区，鼠标停上去时在下面显示说明。上边和高度由部件写在行内，说明的样子和调度台的代价说明一样：小纸条，错位的色块当阴影 */
+.busy-zone {
+  position: absolute;
+  left: -62px;
+  width: 582px;
+}
+
+.busy-hint {
+  display: none;
+  position: absolute;
+  left: 62px;
+  top: calc(100% + 8px);
+  z-index: 2;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--shade);
+  font-size: 16px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.busy-zone:hover .busy-hint {
+  display: block;
 }
 
 /* ---- 右上：速度纸条。文字就是按钮，当前的一项下面画一道手写的线 ---- */
@@ -440,12 +492,28 @@ body {
 }
 
 .upgrade {
-  padding: 8px 20px;
+  padding: 7px 20px 8px;
   cursor: pointer;
 }
 
-.upgrade + .upgrade {
+/* 不能点的行：就近降落买下之后只有按钮能点，起降口 3 级在这座站没到 2 级时不能点 */
+.upgrade.still {
+  cursor: default;
+}
+
+/* 每个节点一格：行本身，加上它右上角的「推演」按钮（按钮在行的外面，行变淡时它不跟着变淡） */
+.upgrade-wrap {
+  position: relative;
+}
+
+.upgrade-wrap + .upgrade-wrap {
   border-top: 1px solid var(--faint);
+}
+
+.upgrade-wrap > .forecast-btn {
+  position: absolute;
+  top: 11px;
+  right: 20px;
 }
 
 .upgrade-name {
@@ -458,8 +526,34 @@ body {
   font-size: 18px;
 }
 
+/* 说明下面的两行小字：适用条件，对应指标 */
+.upgrade-when,
+.upgrade-metric {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+/* 就近降落的开关：状态后面一个按钮，文字本身，加下划线 */
+.upgrade-toggle {
+  margin-left: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
 .upgrade.quiet {
   opacity: 0.6;
+}
+
+/* 改装单顶部：推演次数，数据员到岗之后才有 */
+.forecast-head {
+  padding: 6px 20px 6px;
+  border-bottom: 1px solid var(--faint);
+  font-size: 16px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
 .upgrade.dim {
@@ -481,6 +575,68 @@ body {
   margin-bottom: 4px;
   font-size: 22px;
   font-weight: 700;
+}
+
+/* 小卡里的两块：最近一场高峰里这座站的一行，本站可购买。块与块之间一道细线 */
+.card-block {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--faint);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.card-block-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.card-fleet {
+  margin-top: 6px;
+}
+
+.card .segs {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* 本站可购买：一项一行，钱不够时文字变淡，不能买的原因写在名称下面 */
+.card-buy {
+  padding: 1px 0;
+  cursor: pointer;
+}
+
+.card-buy b {
+  font-weight: 700;
+}
+
+.card-buy.dim .card-buy-text {
+  opacity: 0.35;
+}
+
+/* 每一项右边是「推演」按钮：一行两样，名称（和不能买的原因）在左，按钮在右 */
+.card-buy-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-buy-row .card-buy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.card-buy-row .forecast-btn {
+  flex: none;
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.card-buy-reason {
+  font-size: 14px;
+  line-height: 1.35;
+  opacity: 0.7;
 }
 
 .refund {
@@ -659,7 +815,7 @@ body {
   position: absolute;
   left: 0;
   top: 0;
-  width: 288px;
+  width: 304px;
   box-sizing: border-box;
   padding: 14px 18px 18px;
   color: var(--ink);
@@ -873,6 +1029,16 @@ body {
   display: block;
 }
 
+/* 磁贴右边的「推演」按钮：手写体，推演把这一栏改成这张卡 */
+.magnet .forecast-btn {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: var(--hand);
+  font-size: 15px;
+  font-weight: 400;
+}
+
 /* 选「{片区}优先」时，在这一栏里多出一行：提示和已开通的片区 */
 .picker {
   padding: 4px 2px 6px;
@@ -926,6 +1092,30 @@ body {
   width: 402px;
   padding: 18px 21px 24px;
   line-height: 26px;
+}
+
+/* 高峰小结比窗口高时（三个片区都开通，又有与开局策略的对照，再加上机队时间构成），内容在 ticket-scroll 里滚动，
+   底部的操作固定在小票下沿，不会被窗口切掉。最高到窗口下沿留 12 的位置，上面是速度纸条下面的 108。滚动条不画，用滚轮。
+   ticket-scroll 左右各多 10，手画的圈画出文字外面一点，不被裁掉 */
+.long-ticket.scrolls {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(max(100vh, 720px) / var(--s) - 120px);
+}
+
+/* 点阵字的行盒比行高高一点，最后一行的字会多出 3 左右，下面留 4，免得内容放得下时也能滚动 */
+.ticket-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -10px;
+  padding: 0 10px 4px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.long-ticket.scrolls .actions {
+  flex: none;
+  margin-top: 10px;
 }
 
 .ticket-title {
@@ -1064,6 +1254,28 @@ body {
   gap: 10px;
 }
 
+/* 对照的那句话比小票窄的一行长，折行时只在空格和逗号处折，不把「差别」这样的词拆开 */
+.gain-row > span:first-child {
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: balance;
+}
+
+.sentences.effects {
+  margin-top: 8px;
+}
+
+/* 效果记录的一笔：两句，各占一行，一行放不下时只在逗号和空格处折 */
+.effect > div {
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: balance;
+}
+
 .sentences > div {
   white-space: normal;
   word-break: keep-all;
@@ -1102,6 +1314,11 @@ body {
 
 .early-name {
   font-weight: 700;
+}
+
+/* 机队时间构成：接在单均耗时构成下面，隔开一点 */
+.fleet-block {
+  margin-top: 10px;
 }
 
 .actions {
@@ -1148,4 +1365,95 @@ body {
   to {
     transform: none;
   }
+}
+
+/* ---- 数据员的推演 ---- */
+
+/* 「推演」按钮：文字本身，加下划线。次数用完时变淡，推演进行中写「推演中」，不能再点 */
+.forecast-btn {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.forecast-btn.dim {
+  opacity: 0.35;
+}
+
+.forecast-btn.busy {
+  cursor: default;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
+/* 推演单：一张纸条，贴在按钮所在的物件旁边，位置由 forecast-panel.tsx 算。点它收起。
+   记号是向上的实心三角（更好）、向下的空心三角（更差）和一小段横线（持平），蓝黑一种颜色，靠形状和填充区分 */
+.forecast {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  width: 340px;
+  padding: 12px 18px 12px;
+  font-size: 19px;
+  line-height: 1.45;
+  transform-origin: 0 0;
+  pointer-events: auto;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.forecast-title {
+  margin-bottom: 6px;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: keep-all; /* 中文只在标点和空格处折行，一行放不下时才在字中间断开 */
+  overflow-wrap: anywhere;
+}
+
+.forecast-line {
+  white-space: normal;
+  word-break: keep-all; /* 中文只在标点和空格处折行，一行放不下时才在字中间断开 */
+  overflow-wrap: anywhere;
+}
+
+.forecast-marks {
+  display: block;
+  margin: 4px 0 6px;
+  overflow: visible;
+}
+
+.forecast-marks .mk {
+  stroke: var(--ink);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.forecast-marks .mk.better {
+  fill: var(--ink);
+  stroke-width: 1;
+}
+
+.forecast-marks .mk.worse {
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.forecast-marks .mk.tie {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-opacity: 0.55;
+}
+
+.forecast-scope {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.4;
+  opacity: 0.7;
 }

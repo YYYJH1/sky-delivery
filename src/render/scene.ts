@@ -2,13 +2,14 @@
 // 送达和退单的记号。全是纯函数和小的记录器，不碰 Pixi 和 DOM，不读系统时钟，输出只由状态和参数决定，所以测试可以直接调用。
 // 画面（map-renderer.ts）每帧调用这里，拿到数据再摆精灵。
 import { DroneState, OrderStatus, PROMISE_STEPS, StopKind, isUnlocked, showKeyOf } from '../core/index.ts';
-import type { Drone, Order, SimState } from '../core/index.ts';
+import type { Drone, Order, SimState, Station } from '../core/index.ts';
 import type { City, ShopFront, StationRoof } from './city-types.ts';
 import { AWNING_MAX, RAIL_LENGTH } from './city.ts';
 import { modeOf } from './districts.ts';
 import type { DistrictMode } from './districts.ts';
+import { overlapArea } from './geometry.ts';
 import type { Rect, Vec } from './geometry.ts';
-import { bayPositions } from './layout.ts';
+import { GATE_MAX_LEVEL, bayPositions } from './layout.ts';
 
 // ---- 订单小票 ----
 /** 剩不到 8 秒（下单满 22 秒）起变成急红。 */
@@ -297,6 +298,143 @@ export function holdingSlots(state: SimState, nowSteps: number): { slots: Map<nu
 export function orbitOffset(radius: number, index: number, count: number, seconds: number): Vec {
   const angle = -Math.PI / 2 + HOLD_OMEGA * seconds + (2 * Math.PI * index) / Math.max(1, count);
   return { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
+}
+
+// ---- 等起飞的飞机和起降口 ----
+/**
+ * 已接单、等待起降口放行的飞机：在起降口的队列里等起飞，或者已经接了单、还没排进队列（停在停机位上，路线不空）。
+ * 它们的图和停着不动的飞机一样，停机位与起降口之间画一条短线，站点旁写架数，靠这两样和路线为空、停着不动的飞机分开。
+ */
+export function awaitsTakeoff(d: Pick<Drone, 'state' | 'route' | 'removed'>): boolean {
+  if (d.removed) return false;
+  return d.state === DroneState.TakeoffQueue || (d.state === DroneState.Dock && d.route.length > 0);
+}
+
+/**
+ * 等起飞的飞机在队列里等了不满这么多步的不画短线，也不计进站点旁的架数。起降口空着时，派单的那一步就放行，
+ * 等了一两步的飞机一闪就起飞了，短线和字会一闪一闪。等降落的宽限（HOLD_GRACE_STEPS）也是 5 步。
+ */
+export const TAKEOFF_GRACE_STEPS = 5;
+
+/**
+ * 等起飞的飞机要不要画出来：awaitsTakeoff，并且已经等了至少 TAKEOFF_GRACE_STEPS 步。
+ * 飞机进起降口队列的那一步记在 queuedAt（assignToDockedDrone 里，状态变成 TakeoffQueue 的同一步），
+ * 画面时刻 nowSteps 减 queuedAt 就是已经等了多久，渲染不需要核心另记字段。
+ * 路线不空、停在停机位上没进队列的飞机，核心不会产生这种状态，它的 queuedAt 是上一次排队的步，早就过了宽限。
+ */
+export function showsTakeoffWait(d: Pick<Drone, 'state' | 'route' | 'removed' | 'queuedAt'>, nowSteps: number): boolean {
+  return awaitsTakeoff(d) && nowSteps - d.queuedAt >= TAKEOFF_GRACE_STEPS;
+}
+
+/** 各座站里画出来的等待起飞的飞机数（过了宽限的），按站编号，没有的站不在表里。 */
+export function takeoffCounts(state: SimState, nowSteps: number): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const d of state.drones) {
+    if (d.station < 0 || !showsTakeoffWait(d, nowSteps)) continue;
+    counts.set(d.station, (counts.get(d.station) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * 数据员站在哪座站的屋顶上：数据员到岗之后，编号最小的、没有退回的站。还没到岗、没有站、不是经营模式时为 null。
+ * 沙盒模式没有数据员，也没有解锁这回事（isUnlocked 一律为真），所以要先排除。
+ */
+export function clerkStation(state: SimState): number | null {
+  if (state.campaign === null || !isUnlocked(state, 'dataClerk')) return null;
+  const station = state.stations.find((s) => !s.removed);
+  return station === undefined ? null : station.id;
+}
+
+/** 一座站起降口的等级，1 到 GATE_MAX_LEVEL。经营模式取 campaign.stations 里这座站的 gateLevel，沙盒模式没有升级，一律按一级。 */
+export function gateLevelOf(state: SimState, station: number): number {
+  const level = state.campaign?.stations[station]?.gateLevel;
+  if (level === undefined || !Number.isFinite(level)) return 1;
+  return Math.min(GATE_MAX_LEVEL, Math.max(1, Math.round(level)));
+}
+
+/**
+ * 起降口的环这一刻转了一圈里的多少：每放行一架飞机（起飞和降落都算）转一整圈，转一圈的时长是这座站现在的起降间隔。
+ * 上一次放行的步是 gateFree 减 gateInterval，nowSteps 是画面时刻，带插值的步数。
+ * 返回 0 到 1：刚放行是 0，过了一个间隔是 1。没有新的放行时一直是 1，也就是转满一圈停在起点，环不动。
+ */
+export function gateTurn(station: Pick<Station, 'gateFree' | 'gateInterval'>, nowSteps: number): number {
+  const interval = station.gateInterval;
+  if (!(interval > 0)) return 1;
+  const lastRelease = station.gateFree - interval;
+  return Math.min(1, Math.max(0, (nowSteps - lastRelease) / interval));
+}
+
+// ---- 站点旁的字 ----
+/** 站点旁的字围着哪个圈摆：圈心和半径，画板坐标。 */
+export interface LabelAnchor {
+  readonly cx: number;
+  readonly cy: number;
+  readonly radius: number;
+}
+
+/** 叠成一块的几行字：整块的大小，和每一行的中心相对整块中心的位置。 */
+export interface LabelBlock {
+  readonly w: number;
+  readonly h: number;
+  readonly centers: readonly Vec[];
+}
+
+/** 把几行字上下叠成一块，各行居中对齐，行与行之间空 gap。一行时就是这一行本身。 */
+export function stackLines(lines: readonly { readonly w: number; readonly h: number }[], gap = 0): LabelBlock {
+  const w = lines.reduce((m, l) => Math.max(m, l.w), 0);
+  const h = lines.reduce((sum, l) => sum + l.h, 0) + gap * Math.max(0, lines.length - 1);
+  const centers: Vec[] = [];
+  let top = -h / 2;
+  for (const l of lines) {
+    centers.push({ x: 0, y: top + l.h / 2 });
+    top += l.h + gap;
+  }
+  return { w, h, centers };
+}
+
+/**
+ * 一块字（宽 w）候选的位置，是这块字的中心：先试圈的正上方，再试右上、左上、下面、两侧，最后是右下、左下。
+ * k 是地图上字的放大倍数，镜头缩得越小字越大，偏移跟着放大。
+ * extra 是这块字比单独一行多出来的高度：多行叠成一块时，在圈上方和下方的几个位置往外多挪 extra 的一半，
+ * 这样靠着圈的那一边和单独一行时一样近，多出来的行长在远离圈的一边。单独一行时是 0，位置和只有一行时完全相同。
+ */
+export function labelSpots(a: LabelAnchor, w: number, k: number, extra = 0): Vec[] {
+  const { cx, cy, radius: r } = a;
+  const e = extra / 2;
+  return [
+    { x: cx - 6 * k, y: cy - r - 14 * k - e },
+    { x: cx + r * 0.75 + w / 2 - 20 * k, y: cy - r * 0.9 - 8 * k - e },
+    { x: cx - r * 0.75 - w / 2 + 20 * k, y: cy - r * 0.9 - 8 * k - e },
+    { x: cx - 6 * k, y: cy + r + 16 * k + e },
+    { x: cx + r + w / 2 + 6 * k, y: cy },
+    { x: cx - r - w / 2 - 6 * k, y: cy },
+    { x: cx + r * 0.75 + w / 2 - 20 * k, y: cy + r * 0.9 + 10 * k + e },
+    { x: cx - r * 0.75 - w / 2 + 20 * k, y: cy + r * 0.9 + 10 * k + e },
+  ];
+}
+
+/**
+ * 在候选位置里挑压住别的东西最少的一个。压着 occupied（站点屋顶、店的门面、店名、界面物件）按面积算，
+ * 压着已经放好的字 placed 按三倍算，出了 view 的部分按四倍算。碰到一个什么也不压的就直接取，都压着时取总分最低的。
+ * w 和 h 是整块字的大小，位置是块的中心。
+ */
+export function pickLabelSpot(spots: readonly Vec[], w: number, h: number, occupied: readonly Rect[], placed: readonly Rect[], view: Rect): Vec {
+  let best = spots[0] as Vec;
+  let bestScore = Infinity;
+  for (const c of spots) {
+    const box: Rect = { x: c.x - w / 2, y: c.y - h / 2, w, h };
+    let score = 0;
+    for (const o of occupied) score += overlapArea(box, o);
+    for (const o of placed) score += 3 * overlapArea(box, o);
+    score += 4 * (w * h - overlapArea(box, view));
+    if (score < bestScore) {
+      bestScore = score;
+      best = c;
+      if (score === 0) break;
+    }
+  }
+  return best;
 }
 
 // ---- 航线的尾迹 ----

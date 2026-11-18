@@ -3,7 +3,7 @@
 // 两个结果是同一批订单上的配对比较，差别只来自策略。
 //
 // 做法：每场高峰开始时复制一份状态，叫副本。副本的「调度策略」和「协同策略」设成开局的卡，「合单策略」与主状态相同。
-// 这一场里玩家的建站、购买、退回、开通片区，在同一步原样做给副本。换卡和点击订单插队不做给副本。
+// 这一场里玩家的建站、购买、就近降落的开关、退回、开通片区，在同一步原样做给副本。换卡和点击订单插队不做给副本。
 // 小结时刻副本推进到同一步，用同一个 peakSummary 算出结果，补进这一场的记录。
 // 副本不属于主状态，不进状态哈希和存档。复制状态和一步一步推进副本由会话层做（src/app/play.ts），这里是各步用到的纯函数。
 // 副本里失败的命令（例如副本里的飞机还在路上，退不了）会让这一场的副本和主状态不再对得上，这一场没有对照。
@@ -42,7 +42,7 @@ export interface BaselineDraft {
   waitDroneSeconds: number;
 }
 
-/** 玩家的命令里，改变运力和片区的那几种：做给副本。换卡、点击订单插队、便签已读不做。 */
+/** 玩家的命令里，改变运力、降落规则和片区的那几种：做给副本。换卡、点击订单插队、便签已读、使用推演不做，推演只扣一次推演次数，不影响模拟。 */
 const FORWARDED: ReadonlySet<CommandType> = new Set<CommandType>([
   'buildStation',
   'buyDrone',
@@ -50,6 +50,7 @@ const FORWARDED: ReadonlySet<CommandType> = new Set<CommandType>([
   'upgradeGate',
   'buyDoubleBox',
   'buyNearestLanding',
+  'setNearestLanding', // 就近降落的开关属于购买的一部分，对照里只有策略卡不同，所以开关也做给副本
   'openDistrict',
   'refundDrone',
   'refundBay',
@@ -76,22 +77,31 @@ export function openShadow(copy: SimState, day: number, peak: PeakName): Shadow 
 }
 
 /**
+ * 玩家的一条命令在主状态里成功之后，在一份副本状态上重做一遍，返回在副本里是不是也成功了。两种副本都用它：
+ * 小结对照的副本（下面的 forwardToShadow）和效果记录里不购买的副本（src/app/twins.ts）。
+ * 副本里的余额和价签的开放可能与主状态不同（订单的结果不同，进账就不同，没做过的购买也没有花钱），买东西不能因此失败：
+ * 价签和双层货箱（它们一起开放）在主状态里已经开放时副本也开放，余额不够时补到刚好够。其余原因失败了，副本就和主状态对不上了。
+ * 失败的命令不改副本的状态，只有补开放和补余额这两处已经做了。
+ */
+export function replayOnCopy(copy: SimState, main: SimState, command: Command): boolean {
+  const target = copy.campaign;
+  const origin = main.campaign;
+  if (target === null || origin === null) return false;
+  for (const key of ['priceTags', 'doubleBox'] as const) {
+    if (origin.unlocks[key] >= 0 && target.unlocks[key] < 0) target.unlocks[key] = origin.unlocks[key];
+  }
+  const quote = quoteCommand(copy, command);
+  if (!quote.ok && quote.reason === 'notEnoughMoney') target.money = quote.price;
+  return applyCommand(copy, command).ok;
+}
+
+/**
  * 玩家的一条命令在主状态里成功之后，在同一步做给副本。不在名单里的命令什么也不做。
- * 副本里的余额和价签的开放可能与主状态不同（订单的结果不同，进账就不同），买东西不能因此失败：
- * 价签在主状态里已经开放时副本也开放，余额不够时补到刚好够。其余原因失败了，副本就和主状态对不上了。
+ * 做法见 replayOnCopy。在副本里失败了，副本就和主状态对不上了。
  */
 export function forwardToShadow(shadow: Shadow, main: SimState, command: Command): void {
   if (shadow.diverged || !FORWARDED.has(command.type)) return;
-  const copy = shadow.state.campaign;
-  const origin = main.campaign;
-  if (copy === null || origin === null) {
-    shadow.diverged = true;
-    return;
-  }
-  if (origin.unlocks.priceTags >= 0 && copy.unlocks.priceTags < 0) copy.unlocks.priceTags = origin.unlocks.priceTags;
-  const quote = quoteCommand(shadow.state, command);
-  if (!quote.ok && quote.reason === 'notEnoughMoney') copy.money = quote.price;
-  if (!applyCommand(shadow.state, command).ok) shadow.diverged = true;
+  if (!replayOnCopy(shadow.state, main, command)) shadow.diverged = true;
 }
 
 /**

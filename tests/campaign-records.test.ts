@@ -27,12 +27,15 @@ function peak(day: number, name: PeakName, onTime: number, patch: Partial<PeakRe
     extra: null,
     cleared: null,
     baseline: null,
+    fleet: null,
+    fleetBack: null,
+    stations: [],
     ...patch,
   };
 }
 
 function dayOf(day: number, income: number): DayRecord {
-  return { day, step: (day + 1) * 3600, ordered: 0, resolved: 0, onTime: 0, late: 0, cancelled: 0, pending: 0, income, districts: [], peaksJudged: 0, peaksCleared: 0 };
+  return { day, step: (day + 1) * 3600, ordered: 0, resolved: 0, onTime: 0, late: 0, cancelled: 0, pending: 0, income, districts: [], peaksJudged: 0, peaksCleared: 0, busy: null, effects: [] };
 }
 
 describe('准时单数最多：午高峰和晚高峰各比各的', () => {

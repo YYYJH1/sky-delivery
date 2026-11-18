@@ -5,6 +5,8 @@
 // 底部用一段胶带贴着一张小票条，写上一场同类高峰的结果。
 import { actions, boardOpen, pickingDistrict } from './state.ts';
 import type { BoardCard, BoardColumn, BoardView } from './board.ts';
+import type { ForecastInfo } from './forecast.ts';
+import { ForecastButton } from './forecast-panel.tsx';
 import { paperImage } from './paper.ts';
 import { MarkCircle, MarkUnderline, Sheet } from './sheets.tsx';
 import type { UiData } from './view-model.ts';
@@ -33,8 +35,11 @@ function Picker({ board }: { board: BoardView }) {
   );
 }
 
-/** 一张磁贴：名称在贴上，一句说明在贴下面，悬停时在白板左边显示代价。没开放的画虚线框，说明的位置写开放的条件。 */
-function Magnet({ card }: { card: BoardCard }) {
+/**
+ * 一张磁贴：名称在贴上，一句说明在贴下面，悬停时在白板左边显示代价。没开放的画虚线框，说明的位置写开放的条件。
+ * 数据员到岗之后，不是当前选中的、已经开放的磁贴右边有「推演」按钮，推演把这一栏改成这张卡。
+ */
+function Magnet({ card, info }: { card: BoardCard; info: ForecastInfo | null }) {
   const cls = `magnet${card.selected ? ' on' : ''}${card.locked ? ' locked' : ''}`;
   return (
     <div class={card.wide ? 'magnet-wrap wide' : 'magnet-wrap'}>
@@ -45,13 +50,14 @@ function Magnet({ card }: { card: BoardCard }) {
             {card.cost}
           </div>
         )}
+        <ForecastButton info={info} option={card.forecast} host="board" part={`forecast-board-${card.key}`} />
       </div>
       <div class={card.locked ? 'magnet-desc locked' : 'magnet-desc'}>{card.lockText ?? card.desc}</div>
     </div>
   );
 }
 
-function Column({ column, board, index }: { column: BoardColumn; board: BoardView; index: number }) {
+function Column({ column, board, index, info }: { column: BoardColumn; board: BoardView; index: number; info: ForecastInfo | null }) {
   return (
     <div class="board-col" data-part={`column-${column.key}`}>
       <div class="board-col-title">
@@ -65,7 +71,7 @@ function Column({ column, board, index }: { column: BoardColumn; board: BoardVie
       ) : (
         <div class="cards">
           {column.cards.flatMap((card) => [
-            <Magnet key={card.key} card={card} />,
+            <Magnet key={card.key} card={card} info={info} />,
             card.pick && pickingDistrict.value ? <Picker key={`${card.key}-picker`} board={board} /> : null,
           ])}
         </div>
@@ -132,7 +138,7 @@ export function BoardPanel({ d }: { d: UiData }) {
           )}
         </div>
         {board.columns.map((column, index) => (
-          <Column key={column.key} column={column} board={board} index={index} />
+          <Column key={column.key} column={column} board={board} index={index} info={d.forecast} />
         ))}
         <BoardTicket text={board.ticket} />
       </Sheet>

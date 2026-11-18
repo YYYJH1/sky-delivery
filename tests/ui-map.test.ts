@@ -16,6 +16,7 @@ import { forceHolding } from '../src/ui/debug-params.ts';
 import { TICKET_REACH, hitTest, pickRoof, pickStation, pickTicket, ticketReach } from '../src/ui/map-hit.ts';
 import type { MapTargets, Surface } from '../src/ui/map-hit.ts';
 import {
+  CARD_BOTTOM_RESERVE,
   CARD_GAP,
   CARD_HEIGHT,
   CARD_WIDTH,
@@ -930,6 +931,41 @@ describe('站点小卡的位置', () => {
     const p = cardPlacement({ ...at, y: 1050 }, 1920, 1080, 1);
     expect(p.top).toBeLessThanOrEqual(1080 - CARD_HEIGHT - 8);
     expect(p.top).toBeGreaterThanOrEqual(8);
+  });
+
+  it('小卡的高度每次不同：按给出的高度往上提，矮的小卡离窗口下沿近，高的小卡提得多', () => {
+    const low = { x: 600, y: 900, w: 100, h: 80 };
+    const tall = cardPlacement(low, 1920, 1080, 1, 600);
+    const short = cardPlacement(low, 1920, 1080, 1, 300);
+    expect(tall.top).toBeLessThan(short.top);
+    expect(tall.top + 600).toBeLessThanOrEqual(1080 - CARD_BOTTOM_RESERVE);
+    expect(short.top + 300).toBeLessThanOrEqual(1080 - CARD_BOTTOM_RESERVE);
+    expect(cardPlacement(low, 1920, 1080, 1).top).toBe(cardPlacement(low, 1920, 1080, 1, CARD_HEIGHT).top); // 不给高度时用 CARD_HEIGHT
+  });
+
+  it('小卡变高以后下沿停在窗口下沿留给价签和片区纸条的位置之上，不压住它们', () => {
+    const p = cardPlacement({ ...at, y: 1000 }, 1920, 1080, 1, 560);
+    expect(p.top + 560).toBeLessThanOrEqual(1080 - CARD_BOTTOM_RESERVE);
+  });
+
+  it('窗口太矮放不下：贴着上沿，仍在窗口里', () => {
+    const p = cardPlacement({ x: 500, y: 300, w: 60, h: 40 }, 1280, 720, 2 / 3, 1000);
+    expect(p.top).toBe(8);
+  });
+
+  it('站在上半部分：小卡和站的顶边对齐，不受下沿的限制', () => {
+    expect(cardPlacement({ x: 600, y: 300, w: 100, h: 80 }, 1920, 1080, 1, 560).top).toBe(260);
+  });
+
+  it('最小的窗口 1280×720：最高的小卡（带退回一行，各项都写原因）也整个在窗口里，不压下沿的价签和片区纸条', () => {
+    const scale = 2 / 3;
+    const worst = 640; // 按 1920×1080 的尺寸
+    for (const y of [60, 200, 360, 500, 600, 700]) {
+      const p = cardPlacement({ x: 640, y, w: 60, h: 40 }, 1280, 720, scale, worst);
+      expect(p.top).toBeGreaterThanOrEqual(8);
+      expect(p.top + worst * scale).toBeLessThanOrEqual(720 - 8);
+      expect(p.top + worst * scale).toBeLessThanOrEqual(720 - CARD_BOTTOM_RESERVE * scale + 1e-9);
+    }
   });
 
   it('窗口缩放时，小卡的宽度、高度和距离一起缩放', () => {

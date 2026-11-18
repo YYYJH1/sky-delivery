@@ -1,4 +1,4 @@
-// 引导便签的七个时机、结局，以及经营模式状态的确定性：每一步的状态哈希相同，哈希覆盖口碑、解锁、策略、日结和小结、便签、结局的字段，存读档前后一致。
+// 引导便签的八个时机、结局，以及经营模式状态的确定性：每一步的状态哈希相同，哈希覆盖口碑、解锁、策略、日结和小结、便签、结局的字段，存读档前后一致。
 import { describe, expect, it } from 'vitest';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import {
@@ -27,9 +27,9 @@ function tipSteps(state: SimState): [TipId, number][] {
   return campaignOf(state).tips.map((t) => [t.id, t.step]);
 }
 
-describe('便签：七个时机，每条最多出现一次', () => {
-  it('七条便签的编号就是词表 tips 的键，顺序相同', () => {
-    expect(TIP_IDS).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay', 'gateBusy', 'openOffice']);
+describe('便签：八个时机，每条最多出现一次', () => {
+  it('八条便签的编号就是词表 tips 的键，顺序相同', () => {
+    expect(TIP_IDS).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay', 'dataClerk', 'gateBusy', 'openOffice']);
   });
 
   it('开局没有便签；游戏开始、第一张订单出现的那一步放出「点击订单，派出一架无人机」，出现的步是 0', () => {
@@ -95,45 +95,88 @@ describe('便签：七个时机，每条最多出现一次', () => {
     expect(campaignOf(state).tips.filter((t) => t.id === 'firstRedOrder').map((t) => t.step)).toEqual([221]);
   });
 
-  it('调度台、价签、写字楼区的三条便签随各自的开放一起放出：同一次日结里先调度台，再价签，再写字楼区', () => {
+  it('调度台、价签、数据员、写字楼区的四条便签随各自的开放一起放出：同一次日结里先调度台，再价签，再数据员，最后写字楼区', () => {
     const state = withMoney(quietState({}, false), 500);
     campaignOf(state).districts[0]!.star = 3;
     state.step = 2 * DAY_STEPS;
     settleDay(state, 1);
-    expect(tipSteps(state)).toEqual([['boardReady', 2 * DAY_STEPS], ['canAddBay', 2 * DAY_STEPS], ['openOffice', 2 * DAY_STEPS]]);
+    expect(tipSteps(state)).toEqual([['boardReady', 2 * DAY_STEPS], ['canAddBay', 2 * DAY_STEPS], ['dataClerk', 2 * DAY_STEPS], ['openOffice', 2 * DAY_STEPS]]);
   });
 
-  it('第一次有站点在一场高峰里平均有不少于 1 架飞机等降落：生成这样的小结时放出，参数是站的编号，只放一次', () => {
+  it('第一次有站点在一场高峰里有无人机排队的时间大于一成：生成这样的小结时放出，参数是比例最大的站的编号，只放一次', () => {
     const state = withMoney(quietState());
     const second = must(state, { type: 'buildStation', roof: OLD_SMALL });
-    const row = state.stats.landWait[second] as number[];
-    for (let sec = 60; sec < 150; sec++) row[sec] = 14; // 平均 1.4 架
+    // 午高峰 900 步里，0 号站有 99 步（11%）有无人机排队，第二座站有 180 步（20%）
+    Object.assign(campaignOf(state).tally.peak, { steps: 900, queue: [99, 180] });
     outcomeOrder(state, { district: 0, tOrder: 700, delivered: 900 });
     state.step = 1800;
     recordPeakSummary(state, 0, 'noon');
     expect(campaignOf(state).tips).toEqual([{ id: 'gateBusy', step: 1800, station: second, read: false }]);
     // 晚高峰也满足：不再放第二条
-    const evening = state.stats.landWait[second] as number[];
-    for (let sec = 215; sec < 310; sec++) evening[sec] = 20;
+    Object.assign(campaignOf(state).tally.peak, { steps: 950, queue: [0, 500] });
     outcomeOrder(state, { district: 0, tOrder: 2300, delivered: 2500 });
     state.step = 3400;
     recordPeakSummary(state, 0, 'evening');
     expect(campaignOf(state).tips.filter((t) => t.id === 'gateBusy').length).toBe(1);
   });
 
-  it('平均不到 1 架：不放；恰好 1 架：放', () => {
-    for (const [avg, expected] of [[0.99, false], [1, true]] as const) {
+  it('排队的时间不大于一成：不放，大于一成：放。比例用排队的步数和这一场的步数直接比，不取记录里下取整的百分数，10.9% 记 10，也大于一成', () => {
+    // 900 步的一成是 90 步。90 步正好是一成，不算大于。91 步是 10.1%，98 步是 10.9%，记录里下取整都是 10，便签要放
+    const cases: readonly (readonly [number, number, boolean])[] = [
+      [900, 0, false],
+      [900, 89, false],
+      [900, 90, false],
+      [900, 91, true],
+      [900, 98, true],
+      [900, 99, true],
+      [900, 900, true],
+      [950, 95, false], // 晚高峰 950 步，一成是 95 步
+      [950, 96, true],
+      [1000, 100, false],
+      [1000, 101, true],
+    ];
+    for (const [steps, queue, expected] of cases) {
       const state = withMoney(quietState());
-      const row = state.stats.landWait[0] as number[];
-      for (let sec = 60; sec < 150; sec++) row[sec] = avg * 10;
+      Object.assign(campaignOf(state).tally.peak, { steps, queue: [queue] });
       outcomeOrder(state, { district: 0, tOrder: 700, delivered: 900 });
       state.step = 1800;
-      recordPeakSummary(state, 0, 'noon');
-      expect(campaignOf(state).tips.some((t) => t.id === 'gateBusy')).toBe(expected);
+      const record = recordPeakSummary(state, 0, 'noon');
+      expect(campaignOf(state).tips.some((t) => t.id === 'gateBusy'), `一场 ${steps} 步，排队 ${queue} 步`).toBe(expected);
+      // 记录里仍是下取整的百分数
+      expect(record.stations[0]?.queuePct).toBe(Math.floor((100 * queue) / steps));
     }
   });
 
-  it('一局里七条便签各出现一次：开局点单，新增停机位和购买无人机，换成「时限优先」，某场高峰上空有无人机排队，老街到三星', () => {
+  it('记录里下取整的百分数相同的两座站：参数取真实占比大的站，不取编号小的', () => {
+    const state = withMoney(quietState());
+    const second = must(state, { type: 'buildStation', roof: OLD_SMALL });
+    // 900 步里，0 号站排队 91 步（10.1%），第二座站排队 98 步（10.9%），记录里的下取整都是 10
+    Object.assign(campaignOf(state).tally.peak, { steps: 900, queue: [91, 98] });
+    outcomeOrder(state, { district: 0, tOrder: 700, delivered: 900 });
+    state.step = 1800;
+    const record = recordPeakSummary(state, 0, 'noon');
+    expect(record.stations.map((row) => row.queuePct)).toEqual([10, 10]);
+    expect(campaignOf(state).tips).toEqual([{ id: 'gateBusy', step: 1800, station: second, read: false }]);
+  });
+
+  it('比例相同的两座站：参数取编号小的；只有等降落、没有等起飞的排队也算排队，等降落的平均架数不再决定便签', () => {
+    const state = withMoney(quietState());
+    must(state, { type: 'buildStation', roof: OLD_SMALL });
+    Object.assign(campaignOf(state).tally.peak, { steps: 900, queue: [180, 180] });
+    state.step = 1800;
+    recordPeakSummary(state, 0, 'noon');
+    expect(campaignOf(state).tips).toEqual([{ id: 'gateBusy', step: 1800, station: 0, read: false }]);
+    // 平均有 1.4 架在等降落（旧的条件）：没有排队的计数时不放便签
+    const quiet = withMoney(quietState());
+    const row = quiet.stats.landWait[0] as number[];
+    for (let sec = 60; sec < 150; sec++) row[sec] = 14;
+    quiet.step = 1800;
+    const record = recordPeakSummary(quiet, 0, 'noon');
+    expect(record.extra).toMatchObject({ id: 'landQueue', station: 0 });
+    expect(campaignOf(quiet).tips.some((t) => t.id === 'gateBusy')).toBe(false);
+  });
+
+  it('一局里八条便签各出现一次：开局点单，新增停机位和购买无人机，换成「时限优先」，某场高峰上空有无人机排队，老街到三星', () => {
     const state = campaignState({ seed: 42 });
     const campaign = campaignOf(state);
     for (let i = 0; i < 3 * DAY_STEPS + 1; i++) {
@@ -146,16 +189,16 @@ describe('便签：七个时机，每条最多出现一次', () => {
       }
       if (now === 4100) applyCommand(state, { type: 'setRules', rules: { select: 'deadline' } });
       if (now === 5000) {
-        // 第二天午高峰（第 4200 到 5100 步）的前 80 秒，站点上空平均有 1.8 架飞机在等降落
-        const row = state.stats.landWait[0] as number[];
-        for (let sec = 420; sec < 500; sec++) row[sec] = 20;
+        // 第二天午高峰（第 4200 到 5100 步）里，0 号站有无人机排队的步数加上 400，占这一场的四成以上
+        const queue = campaign.tally.peak.queue;
+        queue[0] = (queue[0] ?? 0) + 400;
       }
       if (now === 10000) campaign.districts[0]!.star = 3; // 第三天的日结时老街是三星
       step(state);
     }
     const tips = campaign.tips;
     expect(tips.map((t) => t.id).sort()).toEqual([...TIP_IDS].sort());
-    expect(tips.length).toBe(7);
+    expect(tips.length).toBe(8);
     expect(tips.map((t) => t.step)).toEqual([...tips.map((t) => t.step)].sort((a, b) => a - b));
     const at = (id: TipId): number => tips.find((t) => t.id === id)?.step ?? -1;
     expect(at('firstOrder')).toBe(0);
@@ -163,6 +206,7 @@ describe('便签：七个时机，每条最多出现一次', () => {
     expect(at('firstRedOrder')).toBeGreaterThan(at('autoDispatchOn'));
     expect(at('boardReady')).toBeGreaterThan(0);
     expect(at('canAddBay')).toBe(DAY_STEPS);
+    expect(at('dataClerk')).toBe(DAY_STEPS); // 数据员随价签一起到岗，便签同一步放出
     expect(at('gateBusy')).toBe(5400);
     expect(tips.find((t) => t.id === 'gateBusy')?.station).toBe(0);
     // 老街到三星的那次日结放出「写字楼区已可开通」：订单少的开局，第二天的日结时老街就到了三星，脚本在第三天强制三星只是兜底
@@ -187,6 +231,7 @@ describe('便签：七个时机，每条最多出现一次', () => {
     expect(stepOf('firstOrder')).toBe(0);
     expect(stepOf('boardReady')).toBe(campaign.unlocks.selectColumn);
     expect(stepOf('canAddBay')).toBe(campaign.unlocks.priceTags);
+    expect(stepOf('dataClerk')).toBe(campaign.unlocks.dataClerk);
     if (campaign.unlocks.showOffice >= 0) expect(stepOf('openOffice')).toBe(campaign.unlocks.showOffice);
   });
 });
@@ -221,7 +266,7 @@ describe('便签：标记已读', () => {
     state.step = 2 * DAY_STEPS;
     settleDay(state, 1);
     must(state, { type: 'readTip', tip: 'canAddBay' });
-    expect(campaignOf(state).tips.map((t) => [t.id, t.read])).toEqual([['boardReady', false], ['canAddBay', true], ['openOffice', false]]);
+    expect(campaignOf(state).tips.map((t) => [t.id, t.read])).toEqual([['boardReady', false], ['canAddBay', true], ['dataClerk', false], ['openOffice', false]]);
   });
 });
 
@@ -426,6 +471,30 @@ describe('经营模式的状态：哈希覆盖口碑、解锁、策略、日结�
       ['ending.orders', (c) => (c.ending!.orders += 1)],
       ['ending', (c) => (c.ending = null)],
       ['ruleSets', (c) => (c.ruleSets = null)],
+      ['nearestOwned', (c) => (c.nearestOwned = !c.nearestOwned)],
+      ['tally.peak.steps', (c) => (c.tally.peak.steps += 1)],
+      ['tally.peak.fleet', (c) => (c.tally.peak.fleet[0]![2]! += 1)],
+      ['tally.peak.back', (c) => (c.tally.peak.back[0]! += 1)],
+      ['tally.peak.takeoffWait', (c) => (c.tally.peak.takeoffWait[0]! += 1)],
+      ['tally.peak.queue', (c) => (c.tally.peak.queue[0]! += 1)],
+      ['tally.peak.sorties', (c) => (c.tally.peak.sorties[0]! += 1)],
+      ['tally.day.drones', (c) => (c.tally.day.drones[5]! += 1)],
+      ['tally.day.used', (c) => (c.tally.day.used[5]! += 1)],
+      ['peaks.fleet', (c) => (c.peaks[0]!.fleet = null)],
+      ['peaks.fleet.work', (c) => (c.peaks[1]!.fleet!.work += 1)],
+      ['peaks.fleetBack', (c) => (c.peaks[1]!.fleetBack = (c.peaks[1]!.fleetBack ?? 0) + 1)],
+      ['peaks.fleetBack.null', (c) => (c.peaks[2]!.fleetBack = null)],
+      ['peaks.stations', (c) => (c.peaks[2]!.stations = [])],
+      ['peaks.stations.queuePct', (c) => (c.peaks[2]!.stations[0]!.queuePct += 1)],
+      ['peaks.stations.gateWait', (c) => (c.peaks[3]!.stations[0]!.gateWait = 99)],
+      ['days.busy', (c) => (c.days[0]!.busy = null)],
+      ['days.busy.segment', (c) => (c.days[1]!.busy![9]! += 1)],
+      ['unlocks.dataClerk', (c) => (c.unlocks.dataClerk += 1)],
+      ['forecast.charges', (c) => (c.forecast.charges += 1)],
+      ['effectWatches', (c) => c.effectWatches.push({ kind: 'gate', step: 5, station: 0, level: 2, peak: 'noon', beforeDay: 0, before: 1.5, left: 3, twins: [] })],
+      ['effectWatches.twins', (c) => c.effectWatches.push({ kind: 'gate', step: 5, station: 0, level: 2, peak: 'noon', beforeDay: 0, before: 1.5, left: 3, twins: [{ day: 1, peak: 'noon', value: 1.1 }] })],
+      ['days.effects', (c) => c.days[0]!.effects.push({ kind: 'nearest', station: null, level: null, peak: 'evening', beforeDay: 0, afterDay: 1, before: 30, after: 25, twin: 31 })],
+      ['days.effects.after', (c) => (c.days[1]!.effects = [{ kind: 'doubleBox', station: null, level: null, peak: 'noon', beforeDay: 0, afterDay: 1, before: 1, after: 1.25, twin: 1.2 }])],
     ];
     const missed: string[] = [];
     for (const [name, change] of mutate) {

@@ -473,7 +473,7 @@ describe('无头脚本 npm run campaign', () => {
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('日结之后');
       expect(r.stdout).toMatch(/第 1 天：老街 2星 准时 55% 退单 0%/);
-      expect(r.stdout).toContain('开放：selectColumn@1800 priceTags@3600');
+      expect(r.stdout).toContain('开放：selectColumn@1800 priceTags@3600 doubleBox@3600');
       expect(r.stdout).toContain('便签：firstOrder@0 autoDispatchOn@453');
       expect(r.stdout).toMatch(/午高峰小结 \w+/);
       const json = JSON.parse(readFileSync(file, 'utf8')) as {
@@ -485,8 +485,9 @@ describe('无头脚本 npm run campaign', () => {
       const report = json.runs[0]?.report ?? [];
       expect(report.map((d) => d.day)).toEqual([1, 2, 3]);
       expect(report[0]?.districts[0]).toMatchObject({ district: 0, star: 2, onTimePct: 55, cancelPct: 0, kind: 'starUp' });
-      expect(report[0]?.unlocked).toEqual([{ key: 'selectColumn', step: 1800 }, { key: 'priceTags', step: DAY_STEPS }]); // 日结在第 3600 步，归在第 1 天
-      expect(report[0]?.tips.map((t) => t.id)).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay']);
+      // 日结在第 3600 步，归在第 1 天。双层货箱和数据员随价签一起开放
+      expect(report[0]?.unlocked).toEqual([{ key: 'selectColumn', step: 1800 }, { key: 'priceTags', step: DAY_STEPS }, { key: 'doubleBox', step: DAY_STEPS }, { key: 'dataClerk', step: DAY_STEPS }]);
+      expect(report[0]?.tips.map((t) => t.id)).toEqual(['firstOrder', 'autoDispatchOn', 'firstRedOrder', 'boardReady', 'canAddBay', 'dataClerk']);
       expect(report[1]?.unlocked).toEqual([]);
       expect(report.every((d) => d.peaks.length === 2)).toBe(true);
       expect(report[0]?.peaks.map((p) => [p.peak, p.main])).toEqual([['noon', 'waitDrone'], ['evening', 'waitDrone']]);

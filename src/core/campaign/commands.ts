@@ -1,5 +1,7 @@
-// 经营模式里玩家的命令：建站、添飞机、加停机位、升级起降口、双层货箱、就近降落、开通片区、
-// 换策略卡、点击订单插队、便签标记已读，以及当天原价退回。
+// 经营模式里玩家的命令：建站、添飞机、加停机位、升级起降口、双层货箱、就近降落（买下，以及买下之后的开关）、开通片区、
+// 换策略卡、点击订单插队、便签标记已读、数据员的推演（扣一次推演次数），以及当天原价退回。
+// 起降口升级、双层货箱、就近降落三种购买成功时，另记一条效果跟踪（effects.ts），购买之后的日结里写这项改装的指标现在的数值和不购买时的数值。
+// 不购买时的数来自会话层里的副本（src/app/twins.ts），核心只记跟踪。
 // 命令在两步之间生效。每个命令先检查条件，不满足时不执行，状态一点不变，返回一个英文的原因代码，界面按代码查词表。
 // 价签、双层货箱、片区的显示、调度台的栏和卡都有开放条件（见 unlocks.ts），没开放时命令失败。
 // 经营模式的调度台只有内容表 rules_v1 列出的卡，换成表外的卡（例如「单独配送」）同样失败，原因也是 ruleLocked。
@@ -10,9 +12,10 @@ import { DAY_STEPS, DroneState, OrderStatus, RANGE, STEPS_PER_SECOND } from '../
 import { hasRule } from '../dispatch/registry.ts';
 import { prioritizeOrder, setRules } from '../state.ts';
 import { nearestStation } from '../systems/orders.ts';
-import { fleetOf, inboundTo, stationCount } from '../systems/stations.ts';
+import { bayCount, droneCount, fleetOf, inboundTo, stationCount } from '../systems/stations.ts';
 import type { PeakName } from '../systems/schedule.ts';
 import type { CampaignState, Drone, Order, RuleColumn, RuleSet, SimState, Station, TipId } from '../types.ts';
+import { watchPurchase } from './effects.ts';
 import { refreshShops } from './map.ts';
 import { bayCap, bayPrice, dronePrice, gatePrice, gateUpgradesTotal, stationPrice } from './prices.ts';
 import { autoPoolAfterDoubleBox } from './rulesets.ts';
@@ -25,10 +28,12 @@ export type Command =
   | { type: 'upgradeGate'; station: number }
   | { type: 'buyDoubleBox' }
   | { type: 'buyNearestLanding' }
+  | { type: 'setNearestLanding'; on: boolean } // 买下就近降落之后，随时免费开启或关闭
   | { type: 'openDistrict'; district: number }
   | { type: 'setRules'; rules: Partial<RuleSet>; peak?: PeakName } // 开通写字楼区之后，peak 指定改午高峰还是晚高峰的一套，不写就改现在生效的那一套
   | { type: 'prioritizeOrder'; order: number }
   | { type: 'readTip'; tip: TipId }
+  | { type: 'useForecast' } // 数据员的推演：免费，扣一次推演次数。推演本身在应用层算，不改模拟，也不做给小结对照的副本
   | { type: 'refundDrone'; drone: number }
   | { type: 'refundBay'; station: number }
   | { type: 'refundStation'; station: number };
@@ -45,9 +50,10 @@ export type CommandFailure =
   | 'stationLimit' // 站数已到上限
   | 'fleetFull' // 这座站的飞机数已等于停机位数
   | 'noFreeBay' // 这座站没有空着的停机位（占用的和预约降落的已经占满）
+  | 'bayTotalFull' // 全城的飞机数已经不少于停机位总数。开过就近降落时，这座站自己有空位也可能碰到
   | 'bayLimit' // 停机位数已到屋顶的上限
   | 'gateMax' // 起降口已是最高级
-  | 'alreadyOwned' // 双层货箱或就近降落已经买过
+  | 'alreadyOwned' // 双层货箱或就近降落已经买过，就近降落关着时也算买过
   | 'needTwoStations' // 就近降落需要两座以上的站
   | 'alreadyOpen' // 片区已经开通
   | 'needStars' // 上一个片区还没达到三星
@@ -56,14 +62,15 @@ export type CommandFailure =
   | 'alreadyRefunded' // 这架飞机或这座站已经退回
   | 'notBoughtToday' // 不是当天买的，或者是开局自带的，不能退
   | 'droneBusy' // 飞机不在停机位上，或手上有任务
-  | 'baysInUse' // 退回之后停机位数会小于飞机数或占用数
+  | 'baysInUse' // 退回之后停机位数会小于飞机数或占用数，或者停机位总数会小于飞机总数
   | 'stationNotEmpty' // 这座站还有飞机，先把飞机退掉
   | 'notEnoughMoney' // 余额不够
   | 'priceTagsLocked' // 价签还没开放：第一次日结之后余额达到内容表里的数才开放
-  | 'doubleBoxLocked' // 双层货箱还没开放：停机位到了屋顶上限，并且之后的一场高峰小结说订单主要在等飞机
+  | 'doubleBoxLocked' // 双层货箱还没开放：它随价签开放，价签没开放时先报 priceTagsLocked，所以只有状态被外部改过之后才会遇到
   | 'districtHidden' // 这个片区还没显示：内容表 UNLOCKS_V1.show 里显示它的条件还没达到过
-  | 'ruleLocked' // 这一栏或这张策略卡还没开放，或者经营模式的调度台里没有这张卡
-  | 'noRuleSets'; // 还没有分成午晚两套（开通写字楼区之前），不能指定改哪一套
+  | 'ruleLocked' // 这一栏或这张策略卡还没开放，或者经营模式的调度台里没有这张卡。开关就近降落（飞完回哪的规则）时，还没有买下就近降落也是这个原因。使用推演时，数据员还没到岗也是这个原因
+  | 'noRuleSets' // 还没有分成午晚两套（开通写字楼区之前），不能指定改哪一套
+  | 'noForecastCharge'; // 推演次数不足，已经用完
 
 export type CommandResult = { ok: true; id: number } | { ok: false; reason: CommandFailure };
 
@@ -182,6 +189,10 @@ function evaluate(state: SimState, command: Command): Evaluation {
       if (!isUnlocked(state, 'priceTags')) return fail('priceTagsLocked', 'buy', price);
       if (fleetOf(state, s.id) >= s.bays) return fail('fleetFull', 'buy', price);
       if (s.occupied + inboundTo(state, s.id) >= s.bays) return fail('noFreeBay', 'buy', price);
+      // 开着就近降落时，飞机落在哪座站就归属哪座站，一座站归属的飞机可以多于它的停机位，所以这座站自己有空位还不够。
+      // 全城的飞机数已经不少于停机位总数时再买一架，总有一架回站时所有的站都没有空位，只能在上空盘旋，电量会耗尽。
+      // 从没买过就近降落的局面里每座站归属的飞机不多于停机位，上面两条都通过时总数一定少于停机位总数，这一条不会拦下任何命令
+      if (droneCount(state) >= bayCount(state)) return fail('bayTotalFull', 'buy', price);
       if (campaign.money < price) return fail('notEnoughMoney', 'buy', price);
       return plan('buy', price, () => {
         const id = state.drones.length;
@@ -243,6 +254,7 @@ function evaluate(state: SimState, command: Command): Evaluation {
         info.gateLevel = next;
         s.gateInterval = gateSteps(next); // 立即生效，下一次放行就按新的间隔
         spend(campaign, price);
+        watchPurchase(state, 'gate', s.id, next);
         return s.id;
       });
     }
@@ -259,19 +271,33 @@ function evaluate(state: SimState, command: Command): Evaluation {
         // 买下的同时「合单策略」一栏开放（refreshUnlocks），这一栏自动从「单独配送」换成「顺路合并」，
         // 否则买了货箱也不会一起送。这次自动换卡不算玩家换卡，不记进 stats.ruleChanges
         autoPoolAfterDoubleBox(state);
+        watchPurchase(state, 'doubleBox');
         return -1;
       });
     }
 
     case 'buyNearestLanding': {
       const price = ECONOMY_V1.nearestLandingPrice;
-      if (state.returnRule === 'nearest') return fail('alreadyOwned', 'buy', price);
+      // 买过就是买过：关掉之后（state.returnRule 回到 home）再买仍是 alreadyOwned，不重复收费
+      if (campaign.nearestOwned) return fail('alreadyOwned', 'buy', price);
       if (!isUnlocked(state, 'priceTags')) return fail('priceTagsLocked', 'buy', price);
       if (stationCount(state) < ECONOMY_V1.nearestLandingMinStations) return fail('needTwoStations', 'buy', price);
       if (campaign.money < price) return fail('notEnoughMoney', 'buy', price);
       return plan('buy', price, () => {
-        state.returnRule = 'nearest';
+        campaign.nearestOwned = true;
+        state.returnRule = 'nearest'; // 买下时开着
         spend(campaign, price);
+        watchPurchase(state, 'nearest'); // 只记买下这一次，之后的开关不记
+        return -1;
+      });
+    }
+
+    case 'setNearestLanding': {
+      // 免费，只改飞完回哪的规则。已经在飞的飞机下一次选降落的站时按新的规则，不去改它们已经选好的站
+      if (typeof command.on !== 'boolean') return fail('unknownTarget');
+      if (!campaign.nearestOwned) return fail('ruleLocked');
+      return plan('free', 0, () => {
+        state.returnRule = command.on ? 'nearest' : 'home';
         return -1;
       });
     }
@@ -335,6 +361,16 @@ function evaluate(state: SimState, command: Command): Evaluation {
       });
     }
 
+    case 'useForecast': {
+      // 免费，只扣一次推演次数。数据员没到岗时用原因 ruleLocked，次数用完时用 noForecastCharge
+      if (!isUnlocked(state, 'dataClerk')) return fail('ruleLocked');
+      if (campaign.forecast.charges < 1) return fail('noForecastCharge');
+      return plan('free', 0, () => {
+        campaign.forecast.charges -= 1;
+        return -1;
+      });
+    }
+
     case 'refundDrone': {
       if (isRefunded(state.drones, command.drone)) return fail('alreadyRefunded', 'refund');
       const d: Drone | undefined = Number.isInteger(command.drone) ? state.drones[command.drone] : undefined;
@@ -359,6 +395,8 @@ function evaluate(state: SimState, command: Command): Evaluation {
       const last = bought[bought.length - 1];
       if (last === undefined || last.day !== today) return fail('notBoughtToday', 'refund');
       if (s.bays - 1 < baysNeeded(state, s)) return fail('baysInUse', 'refund', last.paid);
+      // 别的站归属超员时，这座站自己够用也不行：退掉之后停机位总数不能少于飞机总数
+      if (bayCount(state) - 1 < droneCount(state)) return fail('baysInUse', 'refund', last.paid);
       return plan('refund', last.paid, () => {
         s.bays -= 1;
         bought.pop();
@@ -382,6 +420,8 @@ function evaluate(state: SimState, command: Command): Evaluation {
       // 起降口的升级价是固定的，所以按现在的等级把 2 级到现在等级的升级价加起来，就是当天实付的
       const total = info.bays.reduce((sum, b) => sum + b.paid, info.built.paid) + gateUpgradesTotal(info.gateLevel);
       if (fleetOf(state, s.id) > 0 || s.occupied > 0 || inboundTo(state, s.id) > 0) return fail('stationNotEmpty', 'refund', total);
+      // 站里没有飞机也不行：别的站归属超员时，退掉这座站，它的停机位一起没了，停机位总数不能少于飞机总数
+      if (bayCount(state) - s.bays < droneCount(state)) return fail('baysInUse', 'refund', total);
       return plan('refund', total, () => {
         s.removed = true;
         s.bays = 0;

@@ -1,12 +1,16 @@
 // 日程纸条的时刻换算：一天 3600 步对应 9:30 到 21:30，两个高峰各占一段，标记按步数摆。
 import { describe, expect, it } from 'vitest';
-import { DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, SUMMARY_DELAY } from '../src/core/index.ts';
+import { BUSY_SEGMENTS, DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, SUMMARY_DELAY } from '../src/core/index.ts';
 import {
+  BUSY_OPACITY_MAX,
+  BUSY_OPACITY_MIN,
   DAY_LENGTH_MINUTES,
   DAY_START_MINUTES,
   PEAK_BANDS,
   TICK_MARKS,
   activePeak,
+  busyCells,
+  busyOpacity,
   clockText,
   dayFraction,
   dayNumber,
@@ -108,5 +112,87 @@ describe('当前在哪个高峰', () => {
     expect(activePeak(DAY_STEPS + 700)).toBe('noon');
     expect(activePeak(DAY_STEPS + 2200)).toBe('evening');
     expect(activePeak(DAY_STEPS + 100)).toBeNull();
+  });
+});
+
+describe('运力占用带', () => {
+  const flat = (value: number): number[] => new Array<number>(BUSY_SEGMENTS).fill(value);
+
+  it('24 格，铺满整条时间轴：第一格从 0 开始，最后一格到 1 结束，首尾相接', () => {
+    const cells = busyCells(flat(50)) ?? [];
+    expect(cells).toHaveLength(24);
+    expect(cells[0]?.from).toBe(0);
+    expect(cells[23]?.to).toBe(1);
+    cells.forEach((cell, i) => {
+      expect(cell.to).toBeGreaterThan(cell.from);
+      if (i > 0) expect(cell.from).toBe(cells[i - 1]?.to);
+    });
+  });
+
+  it('每格 150 步，也就是 30 个游戏分钟：第 i 格从游戏时钟 9:30 加 30i 分钟开始', () => {
+    const cells = busyCells(flat(0)) ?? [];
+    cells.forEach((cell, i) => {
+      expect(cell.from).toBeCloseTo((i * 150) / DAY_STEPS, 12);
+      expect(clockText(i * 150)).toBe(clockText(Math.round(cell.from * DAY_STEPS)));
+    });
+    expect(clockText(0)).toBe('9:30');
+    expect(clockText(150)).toBe('10:00');
+    expect(clockText(23 * 150)).toBe('21:00');
+  });
+
+  it('与刻度对齐：每个整点刻度（10 点到 20 点）正好是某一格的起点，位置用同一个比例', () => {
+    const cells = busyCells(flat(0)) ?? [];
+    for (const tick of TICK_MARKS) {
+      expect(cells.some((c) => Math.abs(c.from - tick.at) < 1e-12), `${tick.hour} 点`).toBe(true);
+    }
+  });
+
+  it('与高峰区段对齐：午高峰的起止（11:30 和 14:30）正好是格的边界，晚高峰在第 15 格里面', () => {
+    const cells = busyCells(flat(0)) ?? [];
+    const noon = PEAK_BANDS[0]!;
+    expect(cells.some((c) => Math.abs(c.from - noon.from) < 1e-12)).toBe(true);
+    expect(cells.some((c) => Math.abs(c.from - noon.to) < 1e-12)).toBe(true);
+    const evening = PEAK_BANDS[1]!;
+    const start = cells.find((c) => c.from <= evening.from && evening.from < c.to);
+    expect(start).toBe(cells[14]); // 16:40 在第 15 格（16:30 到 17:00）里
+  });
+
+  it('每格的占用百分数照记录里的，取整后限制在 0 到 100', () => {
+    const values = [0, 7, 50, 99, 100, 120, -4, 33.9, ...flat(1).slice(8)];
+    const cells = busyCells(values) ?? [];
+    expect(cells.slice(0, 8).map((c) => c.pct)).toEqual([0, 7, 50, 99, 100, 100, 0, 33]);
+  });
+
+  it('深浅按占用百分数：越多越深，0 最淡，100 最深，都在 10% 到 55% 之内', () => {
+    expect(BUSY_OPACITY_MIN).toBe(0.1);
+    expect(BUSY_OPACITY_MAX).toBe(0.55);
+    expect(busyOpacity(0)).toBe(BUSY_OPACITY_MIN);
+    expect(busyOpacity(100)).toBe(BUSY_OPACITY_MAX);
+    expect(busyOpacity(50)).toBeCloseTo((BUSY_OPACITY_MIN + BUSY_OPACITY_MAX) / 2, 3);
+    let last = -1;
+    for (let pct = 0; pct <= 100; pct++) {
+      const opacity = busyOpacity(pct);
+      expect(opacity).toBeGreaterThanOrEqual(BUSY_OPACITY_MIN);
+      expect(opacity).toBeLessThanOrEqual(BUSY_OPACITY_MAX);
+      expect(opacity).toBeGreaterThanOrEqual(last);
+      last = opacity;
+    }
+    expect(busyOpacity(-20)).toBe(BUSY_OPACITY_MIN);
+    expect(busyOpacity(400)).toBe(BUSY_OPACITY_MAX);
+    expect(busyOpacity(Number.NaN)).toBe(BUSY_OPACITY_MIN);
+  });
+
+  it('格里带着涂色的不透明度：占用多的格比占用少的格深', () => {
+    const cells = busyCells([...flat(10).slice(0, 12), ...flat(90).slice(12)]) ?? [];
+    expect(cells[0]?.opacity).toBe(busyOpacity(10));
+    expect(cells[23]?.opacity).toBe(busyOpacity(90));
+    expect((cells[23]?.opacity ?? 0) > (cells[0]?.opacity ?? 1)).toBe(true);
+  });
+
+  it('没有占用数（旧存档的记录，还没有日结）或者个数不是 24：不画这条带', () => {
+    expect(busyCells(null)).toBeNull();
+    expect(busyCells([])).toBeNull();
+    expect(busyCells(flat(10).slice(1))).toBeNull();
+    expect(busyCells([...flat(10), 10])).toBeNull();
   });
 });

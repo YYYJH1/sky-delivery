@@ -13,7 +13,7 @@ import {
   StopKind,
 } from '../constants.ts';
 import { creditOrder, deliverOrder } from './settlement.ts';
-import { nearestFreeStation } from './stations.ts';
+import { hasFreeBay, nearestFreeStation } from './stations.ts';
 import type { Drone, Order, RouteStop, SimState, Station } from '../types.ts';
 import type { StationPlan } from '../world.ts';
 
@@ -95,9 +95,16 @@ export function insertIntoRoute(state: SimState, d: Drone, order: Order, route: 
 
 // ---- 状态机 ----
 
-/** 飞回哪座站。默认回自己的站，买了就近降落之后去最近的、停机位没满的站。 */
+/**
+ * 飞回哪座站。默认回自己的站，买了就近降落并且开着时去最近的、停机位没满的站。
+ * 关掉就近降落之后，归属站没有空位（占用数加预约数不小于停机位数）时也改去最近的有空位的站，都满了才回归属站：
+ * 就近降落开着时飞机落在哪座站，归属站就改成哪座，一座站归属的飞机可以多于它的停机位。关掉之后这些飞机回来，
+ * 归属站的停机位已经被别的飞机占着，在上空盘旋要耗电，电量会耗尽。
+ * 从没买过就近降落的局面里，每座站归属的飞机不多于停机位，飞机在外面时它占的不算，归属站总有空位，所以这个分支不会触发。
+ */
 function returnStation(state: SimState, d: Drone): number {
-  return state.returnRule === 'nearest' ? nearestFreeStation(state, d) : d.home;
+  if (state.returnRule === 'nearest') return nearestFreeStation(state, d);
+  return hasFreeBay(state, state.stations[d.home] as Station) ? d.home : nearestFreeStation(state, d);
 }
 
 function hover(d: Drone): void {
@@ -235,12 +242,13 @@ function afterDrop(state: SimState, d: Drone, now: number): void {
   else finishMission(state, d, now);
 }
 
-function afterLand(state: SimState, d: Drone): void {
+function afterLand(d: Drone): void {
   d.state = DroneState.Dock;
   d.stranded = false;
   d.departed = -1;
-  // 就近降落：落在哪座站，归属站就改成哪座，价格和停机位按新的归属站算
-  if (state.returnRule === 'nearest') d.home = d.station;
+  // 落在哪座站，归属站就改成哪座，价格和停机位按新的归属站算。落在归属站时没有变化。
+  // 开着就近降落时飞机落在别的站，关掉之后还在飞往别的站的、以及归属站没有空位改落别的站的飞机也一样，否则它停在这座站里，却算在原来的站名下
+  d.home = d.station;
 }
 
 /** 一架飞机推进一步。动作做完后立刻进入下一个状态，同一步内可以连续转换。 */
@@ -289,7 +297,7 @@ function tickDrone(state: SimState, d: Drone): void {
         return;
       case DroneState.Land:
         if (now >= d.tEnd) {
-          afterLand(state, d);
+          afterLand(d);
           continue;
         }
         return;

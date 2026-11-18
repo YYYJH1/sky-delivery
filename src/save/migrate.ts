@@ -85,10 +85,85 @@ function migrateV2ToV3(data: SaveData): SaveData {
   return data;
 }
 
-/** 正式的迁移表。键是迁移前的版本号：表里的 [n] 把版本 n 迁到 n+1。以后把存档版本升到 4 时，在这里加 [3]。 */
+/** 版本 4 的机队时间和排队的计数，全零。迁移里自己写出来，不引用核心，免得以后核心改了计数的样子，旧的迁移跟着变。 */
+function zeroTally(stations: number): Record<string, unknown> {
+  const zeros = (n: number): number[] => new Array<number>(n).fill(0);
+  return {
+    peak: {
+      steps: 0,
+      fleet: Array.from({ length: stations }, () => zeros(5)),
+      back: zeros(stations),
+      takeoffWait: zeros(stations),
+      queue: zeros(stations),
+      sorties: zeros(stations),
+    },
+    day: { drones: zeros(24), used: zeros(24) },
+  };
+}
+
+/**
+ * 版本 3 到版本 4。经营模式的状态多了几个字段，缺的补默认值，已经有的值一个不改，只有下面第 4 项例外：
+ *   1 campaign.nearestOwned：买下了就近降落。原来的存档里 state.returnRule 是 nearest 就是买下了，按它补。
+ *   2 campaign.tally：机队时间和排队的计数，补成全零，包括回站飞行的计数 back。旧存档没有记过，之后的第一场高峰和第一次日结从读档的那一步起累计。
+ *   3 每场高峰小结：fleet（机队时间构成）和 fleetBack（回站飞行占比）为 null，stations（各站的一行）为空数组。每次日结：busy（运力占用）为 null。
+ *     旧存档没有记过这些，记录一经生成不再修改，所以旧记录里就是没有。
+ *   4 campaign.unlocks.doubleBox：双层货箱改为随价签一起开放。价签已经开放而双层货箱还没开放的存档，
+ *     把双层货箱的开放步补成价签的开放步，与新规则下一局从头玩出来的记录一致。核心在下一次检查开放条件时也会补开，
+ *     这里先补上，读档之后马上就是新规则下的样子。
+ *   5 数据员和效果记录（它们和版本 4 的其余改动在 v0.3.0 一起首次发布，所以不另升版本，这几项补进同一次迁移）：
+ *     campaign.forecast：推演次数，补成 0。旧存档没有记过，读档之后每场高峰的小结加一次。
+ *     campaign.effectWatches：购买的效果跟踪，补成空数组。每次日结：effects（效果行）为空数组。旧存档没有记过，旧记录里就是没有。
+ *       跟踪里副本记下的数（twins）和效果行里不购买时的数（twin）也在同一个版本里：旧存档里没有跟踪和效果行，所以没有它们要补，
+ *       万一跟踪已经在，twins 补成空数组。
+ *     campaign.unlocks.dataClerk：数据员随价签一起到岗。价签已经开放的存档，补成价签的开放步，与双层货箱同样处理，
+ *     没有开放的补成 -1。补开的同时放出「数据员已到岗」的便签，步数取读档时的步，这是迁移对已有内容唯一的追加：
+ *     升级上来的玩家价签早已开放，核心不会再放这张便签，不补的话玩家不知道有推演。
+ */
+function migrateV3ToV4(data: SaveData): SaveData {
+  const state = data.state;
+  const campaign = isRecord(state) ? state.campaign : undefined;
+  if (!isRecord(state) || !isRecord(campaign)) return data;
+  if (campaign.nearestOwned === undefined) campaign.nearestOwned = state.returnRule === 'nearest';
+  if (campaign.tally === undefined) campaign.tally = zeroTally(Array.isArray(state.stations) ? state.stations.length : 0);
+  for (const peak of listOf(campaign.peaks)) {
+    if (peak.fleet === undefined) peak.fleet = null;
+    if (peak.fleetBack === undefined) peak.fleetBack = null;
+    if (peak.stations === undefined) peak.stations = [];
+  }
+  for (const day of listOf(campaign.days)) {
+    if (day.busy === undefined) day.busy = null;
+  }
+  const unlocks = campaign.unlocks;
+  if (isRecord(unlocks)) {
+    const tags = unlocks.priceTags;
+    const box = unlocks.doubleBox;
+    if (typeof tags === 'number' && tags >= 0 && (box === undefined || (typeof box === 'number' && box < 0))) unlocks.doubleBox = tags;
+    if (unlocks.dataClerk === undefined) {
+      const open = typeof tags === 'number' && tags >= 0;
+      unlocks.dataClerk = open ? tags : -1;
+      // 价签已经开放的旧存档，数据员是读档时才到岗的：放出「数据员已到岗」的便签，步数取读档时的步，升级上来的玩家才知道有推演
+      const tips = campaign.tips;
+      if (open && Array.isArray(tips) && !tips.some((tip) => isRecord(tip) && tip.id === 'dataClerk')) {
+        tips.push({ id: 'dataClerk', step: typeof state.step === 'number' ? state.step : 0, station: null, read: false });
+      }
+    }
+  }
+  if (campaign.forecast === undefined) campaign.forecast = { charges: 0 };
+  if (campaign.effectWatches === undefined) campaign.effectWatches = [];
+  for (const watch of listOf(campaign.effectWatches)) {
+    if (watch.twins === undefined) watch.twins = [];
+  }
+  for (const day of listOf(campaign.days)) {
+    if (day.effects === undefined) day.effects = [];
+  }
+  return data;
+}
+
+/** 正式的迁移表。键是迁移前的版本号：表里的 [n] 把版本 n 迁到 n+1。以后把存档版本升到 5 时，在这里加 [4]。 */
 export const MIGRATIONS: MigrationTable = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
+  3: migrateV3ToV4,
 };
 
 export type MigrateResult = { ok: true; data: SaveData } | { ok: false; message: string };

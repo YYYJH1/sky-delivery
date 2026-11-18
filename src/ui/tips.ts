@@ -27,6 +27,8 @@ export function tipText(tip: TipRecord): string {
       return STR.tips.boardReady;
     case 'canAddBay':
       return STR.tips.canAddBay;
+    case 'dataClerk':
+      return STR.tips.dataClerk;
     case 'gateBusy':
       return fmt(STR.tips.gateBusy, { station: stationNumeral((tip.station ?? 0) + 1) });
     case 'openOffice':

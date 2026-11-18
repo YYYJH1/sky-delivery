@@ -23,7 +23,7 @@ import {
 import type { BaselineDraft, Command, PeakName, PeakRecord, SimState } from '../src/core/index.ts';
 import { POLICIES, ruleCommands, shoppingList } from '../tools/autoplay-lib.ts';
 import type { PolicyId } from '../tools/autoplay-lib.ts';
-import { campaignOf, outcomeOrder, quietState, runningState } from './campaign-helpers.ts';
+import { campaignOf, must, outcomeOrder, quietState, roofWhere, runningState } from './campaign-helpers.ts';
 
 interface Played {
   state: SimState;
@@ -270,7 +270,7 @@ describe('副本的生命周期', () => {
 });
 
 describe('做给副本的命令', () => {
-  it('名单：建站、买飞机、加停机位、升级起降口、双层货箱、就近降落、开通片区、三种退回。换卡、点单插队、便签已读不在名单里', () => {
+  it('名单：建站、买飞机、加停机位、升级起降口、双层货箱、就近降落及其开关、开通片区、三种退回。换卡、点单插队、便签已读不在名单里', () => {
     const forwarded: Command[] = [
       { type: 'buildStation', roof: 0 },
       { type: 'buyDrone', station: 0 },
@@ -278,6 +278,7 @@ describe('做给副本的命令', () => {
       { type: 'upgradeGate', station: 0 },
       { type: 'buyDoubleBox' },
       { type: 'buyNearestLanding' },
+      { type: 'setNearestLanding', on: false },
       { type: 'openDistrict', district: 1 },
       { type: 'refundDrone', drone: 0 },
       { type: 'refundBay', station: 0 },
@@ -321,6 +322,24 @@ describe('做给副本的命令', () => {
     expect(campaignOf(shadow.state).unlocks.priceTags).toBe(590);
   });
 
+  it('价签和双层货箱在主状态里一起开放了，副本里都还没开放：双层货箱做给副本时副本也开放，买得成', () => {
+    const main = quietState({}, false);
+    main.step = 600;
+    campaignOf(main).money = 1000;
+    campaignOf(main).unlocks.priceTags = 590;
+    campaignOf(main).unlocks.doubleBox = 590;
+    const shadow = openShadow(structuredClone(main), 0, 'noon');
+    campaignOf(shadow.state).unlocks.priceTags = -1;
+    campaignOf(shadow.state).unlocks.doubleBox = -1;
+    const command: Command = { type: 'buyDoubleBox' };
+    expect(applyCommand(main, command).ok).toBe(true);
+    forwardToShadow(shadow, main, command);
+    expect(shadow.diverged).toBe(false);
+    expect(shadow.state.capacity).toBe(2);
+    expect(campaignOf(shadow.state).unlocks.priceTags).toBe(590);
+    expect(campaignOf(shadow.state).unlocks.doubleBox).toBe(590);
+  });
+
   it('命令在副本里因为别的原因失败，副本就对不上了，不再有结果', () => {
     const { main, shadow } = pair(1000);
     // 主状态里把一块空屋顶建了站，副本里同一块屋顶已经被占了
@@ -333,6 +352,29 @@ describe('做给副本的命令', () => {
     // 副本推进到小结时刻也没有结果
     shadow.state.step = summaryStep(0, 'noon');
     expect(finishShadow(shadow)).toBeNull();
+  });
+
+  it('就近降落的买下和开关都做给副本：副本里同步切换，不算对不上，小结的对照只比策略卡', () => {
+    const main = quietState();
+    main.step = 600;
+    campaignOf(main).money = 100_000;
+    must(main, { type: 'buildStation', roof: roofWhere((r) => r.district === 0 && !r.opening) });
+    const shadow = openShadow(structuredClone(main), 0, 'noon');
+    const commands: Command[] = [
+      { type: 'buyNearestLanding' },
+      { type: 'setNearestLanding', on: false },
+      { type: 'setNearestLanding', on: true },
+      { type: 'setNearestLanding', on: false },
+    ];
+    for (const command of commands) {
+      expect(applyCommand(main, command).ok).toBe(true);
+      forwardToShadow(shadow, main, command);
+      expect(shadow.diverged).toBe(false);
+      expect(shadow.state.returnRule).toBe(main.returnRule);
+      expect(campaignOf(shadow.state).nearestOwned).toBe(campaignOf(main).nearestOwned);
+    }
+    expect(main.returnRule).toBe('home');
+    expect(shadow.state.returnRule).toBe('home');
   });
 
   it('不在名单里的命令什么也不做', () => {

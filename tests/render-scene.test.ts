@@ -19,6 +19,7 @@ import {
   TrailTracker,
   URGENT_AGE_STEPS,
   activeMarks,
+  clerkStation,
   destinations,
   districtModes,
   firstOrderSince,
@@ -38,6 +39,7 @@ import {
   waitingTickets,
 } from '../src/render/scene.ts';
 import { campaignOf, campaignState, must, quietState, withMoney } from './campaign-helpers.ts';
+import { CITY, stateOf } from './helpers.ts';
 
 describe('订单小票的状态和计时条', () => {
   it('不到 22 秒正常，22 到 30 秒（含）快超时，超过 30 秒已超时', () => {
@@ -494,5 +496,44 @@ describe('把一块东西挪出另一块', () => {
     const before = JSON.stringify([rect, zone]);
     moveClear(rect, zone, [zone]);
     expect(JSON.stringify([rect, zone])).toBe(before);
+  });
+});
+
+describe('数据员站在哪座站的屋顶上', () => {
+  it('数据员没到岗：没有人物。经营模式开局什么都没开放，价签开放时数据员到岗', () => {
+    expect(clerkStation(campaignState())).toBeNull();
+    const state = quietState({}, false);
+    expect(clerkStation(state)).toBeNull();
+    unlock(state, 'priceTags');
+    expect(clerkStation(state)).toBeNull(); // 只开了价签，数据员是另一项开放，随价签由核心每步检查时一起开
+    unlock(state, 'dataClerk');
+    expect(clerkStation(state)).toBe(0);
+  });
+
+  it('到岗之后站在编号最小的、没有退回的站的屋顶上：新建的站不换人，最小的站退回之后换到下一座', () => {
+    const state = withMoney(quietState());
+    expect(clerkStation(state)).toBe(0);
+    must(state, { type: 'buildStation', roof: 1 });
+    const third = must(state, { type: 'buildStation', roof: 2 });
+    expect(clerkStation(state)).toBe(0);
+    state.stations[0]!.removed = true;
+    expect(clerkStation(state)).toBe(1);
+    state.stations[1]!.removed = true;
+    expect(clerkStation(state)).toBe(third);
+    state.stations[third]!.removed = true;
+    expect(clerkStation(state)).toBeNull();
+  });
+
+  it('沙盒模式没有数据员：没有解锁这回事，开放项一律算开放，所以要排除', () => {
+    const sandbox = stateOf(CITY, 10);
+    expect(sandbox.campaign).toBeNull();
+    expect(clerkStation(sandbox)).toBeNull();
+  });
+
+  it('只读：不改状态', () => {
+    const state = quietState();
+    const json = JSON.stringify(state);
+    clerkStation(state);
+    expect(JSON.stringify(state)).toBe(json);
   });
 });

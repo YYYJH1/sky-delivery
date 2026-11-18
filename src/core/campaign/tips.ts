@@ -1,17 +1,18 @@
-// 引导便签：七个时机，每条最多出现一次。
+// 引导便签：八个时机，每条最多出现一次。
 // 核心在时机到来时把一条便签（编号、出现的步、参数）放进 campaign.tips，界面读出来显示，再用 readTip 命令标记已读。
 // 已读的便签留在队列里，所以「出现过」永远查得到。编号就是词表 tips 里的键。
 import { NOTES_V1 } from '../../content/notes_v1.ts';
 import { STEPS_PER_SECOND } from '../constants.ts';
 import type { CampaignState, Order, SimState, TipId, TipRecord } from '../types.ts';
 
-/** 七条便签，顺序与词表 tips 里的一致。 */
+/** 八条便签，顺序与词表 tips 里的一致。 */
 export const TIP_IDS: readonly TipId[] = [
   'firstOrder',
   'autoDispatchOn',
   'firstRedOrder',
   'boardReady',
   'canAddBay',
+  'dataClerk',
   'gateBusy',
   'openOffice',
 ];
@@ -59,7 +60,7 @@ function hasUnresolvedOlderThan(state: SimState, steps: number): boolean {
 /**
  * 便签阶段，每步最后调用，只在经营模式里做事。这一阶段负责靠订单状态触发的三条：
  * 开局第一张订单、第五张订单送达（自动派单打开）、自动派单后第一次有还没送到的订单下单超过 22 秒（画面上第一次出现红色）。
- * 另外四条由各自的事件触发，见 unlocks.ts（价签、调度台、写字楼区）和 summary.ts（站点的起降口）。
+ * 另外五条由各自的事件触发，见 unlocks.ts（价签、数据员、调度台、写字楼区）和 summary.ts（站点的起降口）。
  */
 export function tipsPhase(state: SimState): void {
   const campaign = state.campaign;

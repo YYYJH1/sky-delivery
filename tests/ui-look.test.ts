@@ -60,8 +60,8 @@ describe('手画的线', () => {
 });
 
 describe('便签对应的目标', () => {
-  it('七条便签都有去处：订单类贴在小票旁边，其余贴在页面上的物件旁边', () => {
-    expect(TIP_IDS).toHaveLength(7);
+  it('每条便签都有去处：订单类贴在小票旁边，其余贴在页面上的物件旁边', () => {
+    expect(TIP_IDS).toHaveLength(8);
     for (const id of TIP_IDS) expect(tipTarget(id), id).not.toBeNull();
     expect(tipTarget('firstOrder')).toEqual({ kind: 'order', urgent: false });
     expect(tipTarget('autoDispatchOn')).toEqual({ kind: 'order', urgent: false });
@@ -69,6 +69,8 @@ describe('便签对应的目标', () => {
     expect(tipTarget('boardReady')).toEqual({ kind: 'part', part: 'board' });
     expect(tipTarget('canAddBay')).toEqual({ kind: 'part', part: 'tag-bay' });
     expect(tipTarget('gateBusy')).toEqual({ kind: 'part', part: 'tag-upgrades' });
+    // 数据员的便签说点「推演」，入口在改装单里，贴在改装的价签旁边
+    expect(tipTarget('dataClerk')).toEqual({ kind: 'part', part: 'tag-upgrades' });
     expect(tipTarget('openOffice')).toEqual({ kind: 'part', part: 'open-tag-1' });
   });
 
@@ -92,6 +94,7 @@ describe('便签的宽度', () => {
     STR.tips.firstRedOrder,
     STR.tips.boardReady,
     STR.tips.canAddBay,
+    STR.tips.dataClerk,
     fmt(STR.tips.gateBusy, { station: '一' }),
     STR.tips.openOffice,
   ];

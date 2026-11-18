@@ -149,12 +149,23 @@ export interface CampaignRulesV1 {
 /** 高峰小结的说明句和便签用到的数。 */
 export interface NotesV1 {
   onTimeHigh: number; // 主句：准时率不小于这个百分数时写准时率
+  takeoffWaitPct: number; // 附加句：某座站至少有 1 架无人机等待起飞的时间不少于这一场的这个百分数。单位是百分点。
   landQueueMin: number; // 附加句：某座站平均不少于这么多架飞机等降落
   bayIdleShare: number; // 附加句：某座站的停机位空着的时间不少于这个百分数
+  emptyFlightPct: number; // 附加句：全部无人机空载飞行的时间不少于机队时间的这个百分数。单位是百分点。
   notNearestShare: number; // 附加句：不是离店最近的站配送的订单不少于这个百分数
   districtLowGap: number; // 附加句：某个片区的准时率比全城低这么多个百分点以上
+  gateBusyPct: number; // 便签「起降口忙不过来」：某座站至少有 1 架无人机排队（等待起飞或等待降落）的时间大于这一场的这个百分数。单位是百分点。
   redOrderSeconds: number; // 便签：还没送到的订单下单超过这么多秒，画面上出现红色
   middleRadius: number; // 新店位置：离片区中心不超过半边长的这个比例时写「中间」
+}
+
+/** 推演次数、推演的订单序列数和效果记录的天数。数据员提供推演，效果记录在购买改装之后的日结里写。 */
+export interface ForecastV1 {
+  maxCharges: number; // 推演次数的上限。每场高峰的小结生成时加次数，攒到这个数为止。
+  chargesPerPeak: number; // 每场高峰的小结生成时加几次。
+  sequences: number; // 一次推演用的订单序列数，每套序列分别运行带选项和不带选项的两种情况。应用层读取。
+  effectDays: number; // 购买改装之后，在接下来的几次日结里写这项改装的效果。
 }
 
 /** 每场高峰的目标线、过线标记和小结对照用到的数。 */
@@ -162,4 +173,5 @@ export interface GoalsV1 {
   minJudgedOrders: number; // 一场高峰里送往某个片区的订单不少于这个数，才判这个片区达没达标
   minLiveOrders: number; // 高峰进行中，一个片区已完成的订单不少于这个数，才会因为离目标线最远而突出
   lowLoadWaitSeconds: number; // 小结对照里，两种策略下订单平均等飞机的时间都低于这么多秒，算订单不多于运力
+  compareUnclearK: number; // 小结对照里，准时单数的差不为 0，并且绝对值小于 ⌈这个数 × √这一场的来单数⌉ 时，照写差几单，句末加「差别不明显」。取自多套订单序列的模拟。
 }

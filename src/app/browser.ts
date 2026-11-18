@@ -1,7 +1,7 @@
 // 浏览器适配层：把 requestAnimationFrame、visibilitychange、pagehide 接到运行会话上。
 // 这一层很薄，不含游戏逻辑，只负责转发事件并带上两种时间。
 // 环境对象由调用方传入，测试里传一个假的。真实的环境由 browserEnv() 从全局取。
-// 这个文件是 src/app 里唯一碰 DOM 和系统时钟的地方。
+// 这个文件是 src/app 里唯一碰 DOM 和系统时钟的地方。推演的后台线程要的两样环境信息（逻辑核数，线程的全局环境）也在这里取。
 import type { Session } from './session.ts';
 
 export interface BrowserEnv {
@@ -79,5 +79,38 @@ export function attachBrowser(env: BrowserEnv, session: Session): Attached {
       env.document.removeEventListener('visibilitychange', onVisibility);
       env.window.removeEventListener('pagehide', onPageHide);
     },
+  };
+}
+
+/**
+ * 逻辑核数，取不到时按两核算。推演的后台线程数按它定（forecast-client.ts）。
+ * 经过 globalThis 取，没有 DOM 类型的配置下也能通过类型检查。
+ */
+export function hardwareThreads(): number {
+  const nav = (globalThis as unknown as { navigator?: { hardwareConcurrency?: number } }).navigator;
+  const cores = nav?.hardwareConcurrency;
+  return typeof cores === 'number' && cores > 0 ? Math.floor(cores) : 2;
+}
+
+/** Web Worker 里的全局环境：收消息和发消息。 */
+export interface WorkerEnv {
+  postMessage(message: unknown): void;
+  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+}
+
+/**
+ * 在 Web Worker 的全局环境里返回它，在界面线程和 Node 里返回 null：只有 Worker 里有 WorkerGlobalScope。
+ * 后台线程的入口（forecast-worker.ts）靠它判断自己是不是在线程里，所以在别处导入那个文件没有副作用。
+ */
+export function workerEnv(): WorkerEnv | null {
+  const g = globalThis as unknown as {
+    WorkerGlobalScope?: unknown;
+    postMessage?: (message: unknown) => void;
+    addEventListener?: (type: 'message', listener: (event: { data: unknown }) => void) => void;
+  };
+  if (typeof g.WorkerGlobalScope !== 'function' || typeof g.postMessage !== 'function' || typeof g.addEventListener !== 'function') return null;
+  return {
+    postMessage: (message) => g.postMessage?.(message),
+    addEventListener: (type, listener) => g.addEventListener?.(type, listener),
   };
 }

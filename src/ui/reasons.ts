@@ -21,6 +21,7 @@ export const REASON_KEYS: Readonly<Record<CommandFailure, ReasonKey>> = {
   notEnoughMoney: 'notEnoughMoney',
   noFreeBay: 'noFreeBay',
   fleetFull: 'noFreeBay',
+  bayTotalFull: 'bayTotalFull',
   bayLimit: 'bayLimitReached',
   stationLimit: 'stationLimitReached',
   roofTaken: 'rooftopTaken',
@@ -39,6 +40,7 @@ export const REASON_KEYS: Readonly<Record<CommandFailure, ReasonKey>> = {
   orderNotWaiting: 'orderNotWaiting',
   gateMax: 'gateMax',
   alreadyOpen: 'alreadyOpen',
+  noForecastCharge: 'noForecastCharge',
   noRuleSets: GENERIC_REASON,
   alreadyRefunded: GENERIC_REASON,
   unknownTarget: GENERIC_REASON,
@@ -77,6 +79,9 @@ export function failureText(code: CommandFailure, context: FailureContext = {}):
       return context.roofFull === true
         ? reasonText('bayLimitReached', { limit: need(context.limit, 'limit') })
         : reasonText('noFreeBay');
+    case 'bayTotalFull':
+      // 全城的总数已满。这座站自己可能有空位，所以不按屋顶选句子
+      return reasonText('bayTotalFull');
     case 'bayLimit':
       return reasonText('bayLimitReached', { limit: need(context.limit, 'limit') });
     case 'stationLimit':
@@ -115,6 +120,8 @@ export function failureText(code: CommandFailure, context: FailureContext = {}):
     }
     case 'ruleLocked':
       return reasonText('ruleLocked');
+    case 'noForecastCharge':
+      return reasonText('noForecastCharge');
     case 'orderNotWaiting':
       return reasonText('orderNotWaiting');
     case 'gateMax':

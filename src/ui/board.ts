@@ -8,6 +8,7 @@ import { RULE_IDS, STR, districtName, fmt, peakName, ruleCard, ruleName } from '
 import type { DistrictIndex, RuleColumnKey, RuleId } from '../content/strings.zh.ts';
 import { isUnlocked, lastPeakTicket, ruleLock, ruleSetInForce } from '../core/index.ts';
 import type { Command, RuleSet, SimState, UnlockKey } from '../core/index.ts';
+import type { ForecastOption } from './forecast.ts';
 import { wholeMoney } from './money.ts';
 import type { PeakKey } from './schedule.ts';
 
@@ -60,6 +61,11 @@ export interface BoardCard {
   readonly wide: boolean;
   /** 在两列磁贴里排在左列还是右列。占满一行的卡在左列。悬停的代价按它放在白板左边。 */
   readonly col: 0 | 1;
+  /**
+   * 磁贴上的「推演」按钮推演什么：把这一栏改成这张卡，分成午晚两套时改的是白板上现在显示的那一套。
+   * 现在选中的卡和没开放的卡没有。「{片区}优先」推演的是磁贴上写着的那个片区。
+   */
+  readonly forecast: ForecastOption | null;
 }
 
 export interface BoardColumn {
@@ -125,46 +131,50 @@ function setShown(state: SimState, peak: PeakKey | null): RuleSet {
   return sets === null || peak === null ? state.rules : sets[peak];
 }
 
-function cardOf(state: SimState, column: RuleColumnKey, id: RuleId, selectedId: string): BoardCard {
+function cardOf(state: SimState, column: RuleColumnKey, id: RuleId, selectedId: string, peak: PeakKey | null): BoardCard {
   const text = ruleCard(id);
   const lock = ruleLock(state, column, id);
   const locked = lock !== null;
+  const selected = !locked && selectedId === id;
   return {
     key: id,
     column,
     name: text.name,
     desc: text.desc,
     cost: text.cost,
-    selected: !locked && selectedId === id,
+    selected,
     locked,
     lockText: lock === null ? null : lockText(lock),
     pick: false,
     rule: locked ? null : id,
     wide: false,
     col: 0,
+    forecast: locked || selected ? null : { kind: 'card', column, rule: id, peak },
   };
 }
 
 /** 三张「{片区}优先」合成的那一张。选中了其中一张时，名称是那个片区的，没选中时用默认的片区（写字楼区）。 */
-function prioCardOf(state: SimState, selectedId: string): BoardCard {
+function prioCardOf(state: SimState, selectedId: string, peak: PeakKey | null): BoardCard {
   const chosen = prioDistrictOf(selectedId);
   const shownRule = PRIO_RULES[chosen ?? UNLOCKS_V1.prioDistrict] as RuleId;
   const text = ruleCard(shownRule);
   const lock = ruleLock(state, 'select', shownRule);
   const locked = lock !== null;
+  const selected = !locked && chosen !== null;
   return {
     key: PRIO_KEY,
     column: 'select',
     name: text.name,
     desc: text.desc,
     cost: text.cost,
-    selected: !locked && chosen !== null,
+    selected,
     locked,
     lockText: lock === null ? null : lockText(lock),
     pick: !locked,
     rule: null,
     wide: false,
     col: 0,
+    forecast: locked || selected ? null : { kind: 'card', column: 'select', rule: shownRule, peak },
   };
 }
 
@@ -191,7 +201,7 @@ function columnLockOf(state: SimState, column: RuleColumnKey): UnlockKey | null 
   return column === 'select' || first === undefined ? null : ruleLock(state, column, first);
 }
 
-function columnOf(state: SimState, column: RuleColumnKey, selectedId: string): BoardColumn {
+function columnOf(state: SimState, column: RuleColumnKey, selectedId: string, peak: PeakKey | null): BoardColumn {
   const title = STR.board.columns[column];
   // 没开放时整栏只写条件
   const columnLock = columnLockOf(state, column);
@@ -200,11 +210,11 @@ function columnOf(state: SimState, column: RuleColumnKey, selectedId: string): B
   let prioDone = false;
   for (const id of offeredRules(column)) {
     if (column === 'select' && PRIO_RULES.includes(id)) {
-      if (!prioDone) cards.push(prioCardOf(state, selectedId));
+      if (!prioDone) cards.push(prioCardOf(state, selectedId, peak));
       prioDone = true;
       continue;
     }
-    cards.push(cardOf(state, column, id, selectedId));
+    cards.push(cardOf(state, column, id, selectedId, peak));
   }
   return { key: column, title, locked: false, lockText: null, cards: layoutCards(cards) };
 }
@@ -243,7 +253,7 @@ export function computeBoard(state: SimState, boardPeak: PeakKey | null): BoardV
   const inForce = ruleSetInForce(state);
   const shownPeak: PeakKey | null = split ? (boardPeak ?? inForce) : null;
   const shown = setShown(state, shownPeak);
-  const columns = COLUMN_ORDER.map((column) => columnOf(state, column, shown[column]));
+  const columns = COLUMN_ORDER.map((column) => columnOf(state, column, shown[column], shownPeak));
 
   // 收起时列出现在生效的那一套，只列已经开放的栏，也只列调度台里有的卡：
   // 没买双层货箱时核心内部按单独配送运行，这一栏没开放，不写它

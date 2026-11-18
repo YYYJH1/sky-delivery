@@ -9,6 +9,7 @@ import { createDrones } from '../systems/drones.ts';
 import { createStations } from '../systems/stations.ts';
 import type { SimConfig, SimState } from '../types.ts';
 import type { StationPlan } from '../world.ts';
+import { emptyTally } from './fleet.ts';
 import { buildCampaignWorld, refreshShops } from './map.ts';
 import { lockedUnlocks } from './unlocks.ts';
 
@@ -67,6 +68,10 @@ export function createCampaignState(config: SimConfig): SimState {
       ending: null,
       goals: null,
       away: [],
+      nearestOwned: config.returnRule === 'nearest',
+      tally: emptyTally(stations.length),
+      forecast: { charges: 0 },
+      effectWatches: [],
     },
   };
   refreshShops(state);

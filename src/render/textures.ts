@@ -1,6 +1,6 @@
 // 动态元素的纹理：飞机、影子、订单小票、名次数字、停机位、目的地、送达和退单的记号，都在启动时用 Canvas 2D 画一次，
 // 排进一张图集（原大的两倍分辨率），运行时精灵只是取其中一块。昼夜状态一换，整张图集重画一遍（色板不同）。
-// 站点屋顶、店的门面、等降落的圈随场景里有什么按需画，缓存起来。
+// 站点屋顶、店的门面、等降落的圈、起降口的环随场景里有什么按需画，缓存起来。
 import { CanvasSource, Rectangle, Texture } from 'pixi.js';
 import { BASE_COLORS, STATION_COLOR_NAMES } from '../content/palette.ts';
 import { context2d, makeCanvas } from './draw/ctx.ts';
@@ -9,9 +9,11 @@ import {
   TICKET_BOX,
   drawAwning,
   drawCancelMark,
+  drawClerk,
   drawDestination,
   drawDrone,
   drawDroneShadow,
+  drawGate,
   drawLateMark,
   drawOnTimeMark,
   drawRail,
@@ -20,6 +22,7 @@ import {
   drawTicket,
 } from './draw/objects.ts';
 import type { StationArt } from './draw/objects.ts';
+import { GATE_MAX_LEVEL, gateExtent } from './layout.ts';
 import { stationColor, withAlpha } from './look.ts';
 import type { Theme } from './look.ts';
 
@@ -108,7 +111,7 @@ export class Atlas {
           }
         }
       }
-      // 停在停机位上：没有衬边，没有货箱
+      // 停在停机位上：没有衬边，没有货箱。已接单、等起降口放行的飞机也用这一张，靠短线和站点旁的字和停着的飞机分开
       for (const low of [false, true]) {
         key(`drone:${c}:0:0:0:${low ? 1 : 0}`, packer.add(40, 44, 20, 22, (ctx) => drawDrone(ctx, theme, { color: colors[c] as string, cargo: 0, spin: 0, casing: false, lowBattery: low })));
       }
@@ -129,6 +132,8 @@ export class Atlas {
       key(`digit:${n}`, packer.add(20, 24, 10, 15, (ctx) => drawDigit(ctx, theme, fonts.hand, String(n))));
     }
     key('slot', packer.add(24, 24, 12, 12, (ctx) => drawSlot(ctx, theme, 17)));
+    // 数据员：站点屋顶上的一个人，原大 16 像素高，外面一圈衬边
+    key('clerk', packer.add(24, 24, 12, 12, (ctx) => drawClerk(ctx, theme)));
     key('dest:0', packer.add(28, 28, 14, 14, (ctx) => drawDestination(ctx, theme, false)));
     key('dest:1', packer.add(28, 28, 14, 14, (ctx) => drawDestination(ctx, theme, true)));
     key('cancel', packer.add(14, 14, 7, 7, (ctx) => drawCancelMark(ctx, theme)));
@@ -227,7 +232,7 @@ export interface StationTextureKey {
   readonly number: string;
 }
 
-/** 站点屋顶、店的门面、等降落的圈。同一个键只画一次。 */
+/** 站点屋顶、店的门面、等降落的圈、起降口的环。同一个键只画一次。 */
 export class DynamicTextures {
   readonly theme: Theme;
   readonly fonts: FontNames;
@@ -301,6 +306,21 @@ export class DynamicTextures {
         },
         this.mipmaps,
       );
+    });
+  }
+
+  /**
+   * 起降口的环：圆心在屋顶上起降圈的圆心，起降圈外面多 level − 1 道环，最外一道上有一个转动的记号。原点在圆心。
+   * pad 是起降圈的半径，unit 是环的间隔和线宽的放大倍数（镜头缩小时要放大），和等降落的圈一样取到 0.05 的整数倍，同样的只画一次。
+   */
+  gate(level: number, pad: number, unit = 1): Texture {
+    const n = Math.max(1, Math.min(GATE_MAX_LEVEL, Math.round(level)));
+    const r = Math.round(pad * 2) / 2;
+    const u = Math.round(unit * 20) / 20;
+    return this.cached(`gate:${n}:${r}:${u}`, () => {
+      const art = { level: n, pad: r, unit: u };
+      const extent = gateExtent(art);
+      return standalone(2 * extent, 2 * extent, extent, extent, (ctx) => drawGate(ctx, this.theme, art), this.mipmaps);
     });
   }
 

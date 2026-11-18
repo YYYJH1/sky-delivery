@@ -2,6 +2,7 @@
 // 记号是下划线、圈、五颗星，都是 SVG，没有文字，画在父元素的范围里，宽高跟着父元素。
 // 路径按种子生成，同一个种子画出同一笔。线的粗细和颜色由样式表给（.mark），拉伸时线宽不变。
 import type { ComponentChildren } from 'preact';
+import { useLayoutEffect } from 'preact/hooks';
 import { handStar, stretchCircle, stretchUnderline } from './hand.ts';
 import type { PaperKind } from './paper.ts';
 import { usePaper } from './paper-use.ts';
@@ -38,12 +39,20 @@ export interface SheetProps {
   /** 另加的属性，如 data-state。 */
   readonly attrs?: Record<string, string>;
   readonly onClick?: () => void;
+  /** 物件排出来的大小量出来或者变了的时候调用，宽高是布局像素，不含缩放。站点小卡按它的高度摆放。 */
+  readonly onSize?: (size: { readonly w: number; readonly h: number }) => void;
   readonly children?: ComponentChildren;
 }
 
 /** 一张纸：直接当一个物件的外壳用。背景图画在 .sheet::before 上，物件的大小变了就重新画。 */
 export function Sheet(props: SheetProps) {
   const paper = usePaper<HTMLDivElement>(props.kind, props.seed, { depth: props.depth });
+  const { w, h } = paper.size;
+  const { onSize } = props;
+  // 量出大小之后马上告诉调用者，在浏览器画出这一帧之前
+  useLayoutEffect(() => {
+    if (onSize !== undefined && w > 0 && h > 0) onSize({ w, h });
+  }, [onSize, w, h]);
   return (
     <div class={`${props.class} sheet`} data-part={props.part} ref={paper.ref} style={{ ...props.style, ...paper.style }} onClick={props.onClick} {...props.attrs}>
       {props.children}

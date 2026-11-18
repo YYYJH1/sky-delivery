@@ -8,13 +8,14 @@ import { currentTip, endingLines, endingText, tipText } from '../src/ui/tips.ts'
 import { campaignOf, campaignState, runningState } from './campaign-helpers.ts';
 
 describe('便签的文字', () => {
-  it('七条的文字都取自词表', () => {
+  it('除了带站号的起降拥堵，其余七条的文字都取自词表', () => {
     const expected: [TipId, string][] = [
       ['firstOrder', STR.tips.firstOrder],
       ['autoDispatchOn', STR.tips.autoDispatchOn],
       ['firstRedOrder', STR.tips.firstRedOrder],
       ['boardReady', STR.tips.boardReady],
       ['canAddBay', STR.tips.canAddBay],
+      ['dataClerk', STR.tips.dataClerk],
       ['openOffice', STR.tips.openOffice],
     ];
     for (const [id, text] of expected) expect(tipText({ id, step: 0, station: null, read: false })).toBe(text);
@@ -25,8 +26,8 @@ describe('便签的文字', () => {
     expect(tipText({ id: 'gateBusy', step: 0, station: 2, read: false })).toBe(fmt(STR.tips.gateBusy, { station: '三' }));
   });
 
-  it('核心的七个便签编号都有文字，没有没填的参数', () => {
-    expect(TIP_IDS).toHaveLength(7);
+  it('核心的八个便签编号都有文字，没有没填的参数', () => {
+    expect(TIP_IDS).toHaveLength(8);
     for (const id of TIP_IDS) {
       const text = tipText({ id, step: 0, station: 1, read: false });
       expect(text.length).toBeGreaterThan(4);

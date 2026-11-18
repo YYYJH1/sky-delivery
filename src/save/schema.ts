@@ -90,15 +90,51 @@ const DAY_DISTRICT: Check = obj({
   newShops: arr(obj(fields({ int: 'shop', str: 'direction' }))),
 });
 
+/** 日结里的一行效果：一项改装现在的指标数值和不购买时的数值，另有购买前的数值。数是除法算出来的，按数字检查。 */
+const EFFECT_LINE: Check = obj({
+  ...fields({ str: 'kind peak', int: 'beforeDay afterDay', num: 'before after twin' }),
+  station: nullable(int),
+  level: nullable(int),
+});
+
 const DAY_RECORD: Check = obj({
   ...fields({ int: 'day step ordered resolved onTime late cancelled pending peaksJudged peaksCleared', num: 'income' }),
   districts: arr(DAY_DISTRICT),
+  busy: nullable(arr(num)),
+  effects: arr(EFFECT_LINE),
 });
+
+/** 副本（不购买的一份）在一场高峰里的指标，数是除法算出来的，按数字检查。 */
+const EFFECT_TWIN: Check = obj(fields({ int: 'day', str: 'peak', num: 'value' }));
+
+/** 一笔购买的效果跟踪：购买前的数值，还要写几次日结，和副本记下的数。 */
+const EFFECT_WATCH: Check = obj({
+  ...fields({ str: 'kind', int: 'step', natural: 'left' }),
+  station: nullable(int),
+  level: nullable(int),
+  peak: nullable(str),
+  beforeDay: nullable(int),
+  before: nullable(num),
+  twins: arr(EFFECT_TWIN),
+});
+
+/** 数据员的推演次数。 */
+const FORECAST: Check = obj(fields({ natural: 'charges' }));
 
 /** 小结对照：同一批订单按开局策略的结果。 */
 const PEAK_BASELINE: Check = obj({
   ...fields({ int: 'orders onTime late lateOpen cancelled', num: 'revenue', bool: 'lowLoad' }),
   districts: arr(obj({ ...fields({ int: 'district n onTime' }), pct: nullable(num) })),
+});
+
+/** 机队时间构成：五项是按最大余数分配出来的百分数，按数字检查。 */
+const PEAK_FLEET: Check = obj(fields({ num: 'loaded empty work queue parked' }));
+
+/** 小结里一座站的一行。 */
+const PEAK_STATION_ROW: Check = obj({
+  ...fields({ int: 'station sorties', num: 'landWaitAvg takeoffWaitPct queuePct' }),
+  gateWait: nullable(num),
+  fleet: nullable(PEAK_FLEET),
 });
 
 const PEAK_RECORD: Check = obj({
@@ -118,6 +154,9 @@ const PEAK_RECORD: Check = obj({
   extra: nullable(obj(fields({ str: 'id' }))),
   cleared: nullable(bool),
   baseline: nullable(PEAK_BASELINE),
+  fleet: nullable(PEAK_FLEET),
+  fleetBack: nullable(num), // 回站飞行占比，下取整的百分数，按数字检查
+  stations: arr(PEAK_STATION_ROW),
 });
 
 /** 最近一场高峰各片区的目标。 */
@@ -126,13 +165,25 @@ const PEAK_GOALS: Check = obj({
   goals: arr(obj({ ...fields({ int: 'district', str: 'kind basis' }), line: nullable(num) })),
 });
 
+/** 机队时间和排队的计数：当场高峰的，和当天各时刻的。back 是按归属站累计的回站飞行架·步数。 */
+const PEAK_TALLY: Check = obj({
+  ...fields({ natural: 'steps' }),
+  fleet: arr(arr(natural)),
+  back: arr(natural),
+  takeoffWait: arr(natural),
+  queue: arr(natural),
+  sorties: arr(natural),
+});
+
+const DAY_TALLY: Check = obj({ drones: arr(natural), used: arr(natural) });
+
 const TIP_RECORD: Check = obj({
   ...fields({ str: 'id', int: 'step', bool: 'read' }),
   station: nullable(int),
 });
 
 const CAMPAIGN: Check = obj({
-  ...fields({ int: 'contentVersion delivered', num: 'money spent refunded' }),
+  ...fields({ int: 'contentVersion delivered', num: 'money spent refunded', bool: 'nearestOwned' }),
   income: arr(num),
   districts: arr(obj(fields({ bool: 'open', int: 'star' }))),
   shopOpen: arr(bool),
@@ -151,6 +202,9 @@ const CAMPAIGN: Check = obj({
   ending: nullable(obj(fields({ int: 'step days orders' }))),
   goals: nullable(PEAK_GOALS),
   away: arr(obj(fields({ int: 'step', num: 'seconds amount' }))),
+  tally: obj({ peak: PEAK_TALLY, day: DAY_TALLY }),
+  forecast: FORECAST,
+  effectWatches: arr(EFFECT_WATCH),
 });
 
 /** SimState 的顶层字段表。 */

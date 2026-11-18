@@ -4,8 +4,8 @@
 // - 静态层：片区底色、街道和街区、屋顶和屋顶物件、树、河、桥、片区名。载入时用 Canvas 2D 画一次，烘焙成纹理（bake.ts、static-layers.ts），
 //   每种状态一套。整张地图放进窗口时分片区烘焙，片区的显示状态只换透明度。窗口大小变了、烘焙倍率跟着变时才重新烘焙，平时每帧不烘焙。
 //   昼夜渐变时两种状态的静态层叠在一起按比例混合，下一种状态在要用之前就一层一层提前烘焙好，烘焙好的纹理留着复用（setBlend、warmAhead）。
-// - 动态层：每帧更新的精灵和对象池：站点和停机位，选中的站，候选屋顶，店的门面和票杆上的小票，飞机和影子，航线（一个网格一次绘制），
-//   送餐目的地，送达和退单的记号，等降落的圈和架数，雨。动态层的画法（色板）不渐变：渐变过半时从一种状态换到另一种，
+// - 动态层：每帧更新的精灵和对象池：站点和停机位，起降口的环（围着屋顶上的起降圈），数据员（站在编号最小的站的屋顶上），选中的站，候选屋顶，店的门面和票杆上的小票，飞机和影子，航线（一个网格一次绘制），
+//   等起飞的飞机和它的短线，送餐目的地，送达和退单的记号，等降落的圈，等起飞和等降落的架数，雨。动态层的画法（色板）不渐变：渐变过半时从一种状态换到另一种，
 //   两种色板混合出来的墨色和纸色会撞在一起，字和飞机的轮廓就看不清了。
 // 画板是屏幕朝向的：世界坐标先转一个固定的角度再摆放（geometry.ts），所以排线永远是 45°。镜头（camera.ts）把画板缩放平移到窗口里，
 // 缩放只作用在整个画板上，不影响烘焙。镜头缩放比 1 小时，会动的东西和字按 camera.ts 的 markerUnits 放大一些，才看得清。镜头在片区第一次显示时拉远，
@@ -24,9 +24,9 @@ import { assignDistricts } from './districts.ts';
 import type { DistrictMode } from './districts.ts';
 import { dominantLook } from './daynight.ts';
 import type { LookBlend } from './daynight.ts';
-import { clipOutside, headingOf, inflate, lerp, moveClear, overlapArea, unionRect } from './geometry.ts';
+import { clipOutside, headingOf, inflate, lerp, moveClear, unionRect } from './geometry.ts';
 import type { Board, Rect, Vec } from './geometry.ts';
-import { slotSize } from './layout.ts';
+import { CLERK_HEIGHT, CLERK_WIDTH, clerkScale, clerkSpot, gateOuter, landingCircle, slotSize } from './layout.ts';
 import { LOOK_NAMES, hexToInt, mixColor, palFor, stationColor, themeFor } from './look.ts';
 import type { Look, Theme } from './look.ts';
 import { districtFootprints, placeNames } from './names.ts';
@@ -38,24 +38,32 @@ import {
   SlotTracker,
   TrailTracker,
   activeMarks,
+  clerkStation,
   destinations,
   firstOrderSince,
   frontDepth,
   frontPoint,
   frontZone,
+  gateLevelOf,
+  gateTurn,
   holdEase,
   holdingSlots,
+  labelSpots,
   nearestStationOf,
   orbitOffset,
+  pickLabelSpot,
   placeTickets,
   railEnds,
   roofsByIndex,
+  showsTakeoffWait,
   simplify,
   slotWorldPositions,
+  stackLines,
   stationRoofRect,
+  takeoffCounts,
   waitingTickets,
 } from './scene.ts';
-import type { TicketPoint } from './scene.ts';
+import type { LabelAnchor, TicketPoint } from './scene.ts';
 import { MIN_MIX, StaticLayers } from './static-layers.ts';
 import type { StaticLayout } from './static-layers.ts';
 import { Atlas, DynamicTextures, SPIN_FRAMES, TEXTURE_RESOLUTION } from './textures.ts';
@@ -201,9 +209,21 @@ export interface RenderStats {
   looksResident: number;
   /** 动态层最近一次换画法（图集、动态纹理、字、纸纹重画）花的毫秒。 */
   switchMs: number;
+  /** 上一帧画了几个起降口的环，几架等起飞的飞机（过了宽限的，TAKEOFF_GRACE_STEPS），其中几架画了通向起降口的短线。界面层没有渲染器时的空统计不带这三项。 */
+  gates?: number;
+  waiting?: number;
+  links?: number;
+  /** 上一帧画了几个数据员，没到岗时为 0，到岗之后为 1。 */
+  clerks?: number;
 }
 
 const PARKED_SCALE = 0.44;
+/** 等起飞的飞机，停机位到起降口的环的短线：线宽，不透明度，短于这个长度就不画。 */
+const LINK_WIDTH = 1.7;
+const LINK_ALPHA = 0.95;
+const LINK_MIN = 3;
+/** 站点旁的字，等起飞和等降落两行叠在一起时，行与行之间的空隙，乘字的放大倍数。 */
+const LABEL_LINE_GAP = 0;
 /** 航线的粗细：载货 4，空飞 2.6，指向目的地的点线 1.6。 */
 const LOADED_WIDTH = 4;
 const EMPTY_WIDTH = 2.6;
@@ -212,6 +232,22 @@ const TAIL_ALPHA: readonly number[] = [0.34, 0.64, 1];
 const LEAD_ALPHA = 0.8;
 const NO_MODES: readonly DistrictMode[] = [];
 
+/** 一座站这一帧的几何：屋顶，站点中心，停机位，等降落的圈的半径，和起降口的环（画板坐标）。 */
+interface StationGeo {
+  readonly rect: Rect;
+  readonly center: Vec;
+  readonly slots: Vec[];
+  readonly radius: number;
+  /** 起降口的环：圆心在起降圈的圆心，rim 是最外一道环的半径。 */
+  readonly gate: { readonly x: number; readonly y: number; readonly rim: number };
+}
+
+/** 站点旁要写的字：围着哪个圈，等降落和等起飞各几架。 */
+interface HoldTag extends LabelAnchor {
+  readonly hold: number;
+  readonly takeoff: number;
+}
+
 function ease(t: number): number {
   const c = Math.max(0, Math.min(1, t));
   return c * c * (3 - 2 * c);
@@ -219,11 +255,13 @@ function ease(t: number): number {
 
 export class MapRenderer {
   readonly app: Application;
-  readonly stats: RenderStats = { drones: 0, tickets: 0, stations: 0, routeQuads: 0, updateMs: 0, renderMs: 0, bakes: 0, bakeMs: 0, lookFrom: 0, lookTo: 0, mix: 0, staticBytes: 0, looksResident: 0, switchMs: 0 };
+  readonly stats: RenderStats = { drones: 0, tickets: 0, stations: 0, routeQuads: 0, updateMs: 0, renderMs: 0, bakes: 0, bakeMs: 0, lookFrom: 0, lookTo: 0, mix: 0, staticBytes: 0, looksResident: 0, switchMs: 0, gates: 0, waiting: 0, links: 0, clerks: 0 };
   /** 上一次 update 里挂在票杆上的小票，画板坐标。 */
   readonly ticketPoints: TicketPoint[] = [];
   /** 上一次 update 里画出来的店名的框，画板坐标。选屋顶的文字用它躲开店名，也给调试用。 */
   readonly nameBoxes: { shop: number; x: number; y: number; w: number; h: number }[] = [];
+  /** 上一次 update 里画出来的数据员的外接框，画板坐标，没到岗时为空。给调试和截图检查用，看人物在不在屋顶里、有多大。 */
+  readonly clerkBoxes: Rect[] = [];
   private readonly opts: MapRendererOptions;
   private readonly layout: StaticLayout;
   private readonly staticRoot = new Container();
@@ -234,6 +272,9 @@ export class MapRenderer {
     shops: new Container(),
     stations: new Container(),
     selection: new Container(),
+    gates: new Container(),
+    clerks: new Container(),
+    links: new Container(),
     parked: new Container(),
     dest: new Container(),
     routes: new Container(),
@@ -271,6 +312,9 @@ export class MapRenderer {
     selection: Pool<Sprite>;
     roofFrames: Pool<Sprite>;
     slots: Pool<Sprite>;
+    gates: Pool<Sprite>;
+    clerks: Pool<Sprite>;
+    links: Pool<Sprite>;
     parked: Pool<Sprite>;
     dest: Pool<Sprite>;
     rings: Pool<Sprite>;
@@ -382,6 +426,9 @@ export class MapRenderer {
       selection: mk(layers.selection, Texture.WHITE),
       roofFrames: mk(layers.frames, Texture.WHITE),
       slots: mk(layers.stations, this.atlas.get('slot')),
+      gates: mk(layers.gates, Texture.WHITE),
+      clerks: mk(layers.clerks, this.atlas.get('clerk')),
+      links: mk(layers.links, Texture.WHITE),
       parked: mk(layers.parked, this.atlas.drone(0, 0, 0, false, false)),
       dest: mk(layers.dest, this.atlas.get('dest:0')),
       rings: mk(layers.routes, Texture.WHITE),
@@ -732,6 +779,9 @@ export class MapRenderer {
     for (const pool of Object.values(P)) pool.begin();
     this.ticketPoints.length = 0;
     this.nameBoxes.length = 0;
+    this.clerkBoxes.length = 0;
+    this.stats.waiting = 0;
+    this.stats.links = 0;
     const wallDt = this.lastWallMs === null ? Number.POSITIVE_INFINITY : Math.max(0, (t0 - this.lastWallMs) / 1000);
     this.lastWallMs = t0;
     this.statics.setModes(frame.districts ?? NO_MODES, wallDt);
@@ -754,9 +804,11 @@ export class MapRenderer {
     // 站点
     const slotOf = this.slotTracker.update(state);
     const { slots: holdSlot, counts: holdCount } = holdingSlots(state, nowSteps);
-    const stationGeo = new Map<number, { rect: Rect; center: Vec; slots: Vec[]; radius: number }>();
+    const takeoffWaiting = takeoffCounts(state, nowSteps);
+    const clerkAt = clerkStation(state);
+    const stationGeo = new Map<number, StationGeo>();
     const roofRects: Rect[] = [];
-    const pendingHold: { cx: number; cy: number; radius: number; count: number }[] = [];
+    const pendingHold: HoldTag[] = [];
     /** 画板上已经被占着的地方：站点屋顶、店的门面和票杆、店名、界面物件盖着的地方，等降落的字要躲开。 */
     const occupied: Rect[] = [];
     for (const r of frame.reserved ?? []) {
@@ -768,7 +820,13 @@ export class MapRenderer {
       const limit = this.opts.bayLimit?.(state, st.id) ?? st.bays;
       const slots = slotWorldPositions(rect.x, rect.y, rect.w, rect.h, st.bays, limit);
       const radius = Math.max(60, Math.sqrt(rect.w * rect.w + rect.h * rect.h) / 2 + 16);
-      stationGeo.set(st.id, { rect, center, slots, radius });
+      // 起降口的环围着屋顶左侧带站号的起降圈，圆心在起降圈的圆心。站点中心在屋顶正中，压在起降圈的右缘和停机位之间，
+      // 环画在那里会盖住站号和停机位的角标，所以不放在站点中心
+      const pad = landingCircle(Math.round(rect.w), Math.round(rect.h));
+      const gatePoint = board.toBoard(rect.x + pad.cx, rect.y + pad.cy);
+      const level = gateLevelOf(state, st.id);
+      const unit = Math.round(U.mark * 20) / 20;
+      stationGeo.set(st.id, { rect, center, slots, radius, gate: { x: gatePoint.x, y: gatePoint.y, rim: gateOuter(pad.r, level, unit) } });
       roofRects.push(inflate(rect, 3));
       const color = st.id % STATION_COLOR_NAMES.length;
       const base = P.stationRoofs.next();
@@ -800,24 +858,52 @@ export class MapRenderer {
         slot.rotation = board.angle;
         slot.scale.set(size / 17);
       }
-      // 等降落的圈和架数
+      // 起降口的环：一级只有起降圈，每升一级外面多一道环。每放行一架飞机（起飞和降落都算）转一整圈，
+      // 转一圈的时长是这座站现在的起降间隔，没有放行时停在起点。环比等降落的圈小得多，是实线，和它分得开
+      const gate = P.gates.next();
+      const gt = this.dyn.gate(level, pad.r, unit);
+      gate.texture = gt;
+      gate.anchor.set(gt.defaultAnchor?.x ?? 0.5, gt.defaultAnchor?.y ?? 0.5);
+      gate.position.set(gatePoint.x, gatePoint.y);
+      gate.rotation = board.angle + gateTurn(st, nowSteps) * Math.PI * 2;
+      gate.scale.set(1);
+      // 数据员：站在这座站屋顶的左下角，起降圈的左下方，和屋顶一起转，镜头缩小时按记号的倍数放大（不压住站号），缩到最小也认得出是个人
+      if (clerkAt === st.id) {
+        const k = clerkScale(Math.round(rect.w), Math.round(rect.h), U.mark);
+        const spot = clerkSpot(Math.round(rect.h), k);
+        const at = board.toBoard(rect.x + spot.x, rect.y + spot.y);
+        const clerk = P.clerks.next();
+        clerk.texture = this.atlas.get('clerk');
+        clerk.anchor.set(0.5, 0.5);
+        clerk.position.set(at.x, at.y);
+        clerk.rotation = board.angle;
+        clerk.scale.set(k);
+        const w = CLERK_WIDTH * k;
+        const h = CLERK_HEIGHT * k;
+        this.clerkBoxes.push(board.boundsOf({ x: rect.x + spot.x - w / 2, y: rect.y + spot.y - h / 2, w, h }));
+      }
+      // 等降落的圈和架数：圈心在站点中心
+      const c = board.toBoard(center.x, center.y);
       const count = holdCount.get(st.id) ?? 0;
       if (count > 0) {
         const ring = P.rings.next();
         const rt = this.dyn.holdRing(color, radius, U.line);
         ring.texture = rt;
         ring.anchor.set(rt.defaultAnchor?.x ?? 0.5, rt.defaultAnchor?.y ?? 0.5);
-        const c = board.toBoard(center.x, center.y);
         ring.position.set(c.x, c.y);
         ring.rotation = seconds * 0.35;
         ring.scale.set(1);
         ring.blendMode = this.routeBlend();
         ring.alpha = 0.9;
-        pendingHold.push({ cx: c.x, cy: c.y, radius, count });
       }
+      // 站点旁的字：等起飞的架数和等降落的架数并列
+      const queued = takeoffWaiting.get(st.id) ?? 0;
+      if (count > 0 || queued > 0) pendingHold.push({ cx: c.x, cy: c.y, radius, hold: count, takeoff: queued });
       occupied.push(board.boundsOf(rect));
     }
     this.stats.stations = P.stationRoofs.active;
+    this.stats.gates = P.gates.active;
+    this.stats.clerks = P.clerks.active;
 
     // 店的门面和票杆上的小票
     const first = firstOrderSince(state, Math.floor(nowSteps) - 2400);
@@ -987,7 +1073,7 @@ export class MapRenderer {
   private placeDrone(
     frame: RenderFrame,
     d: Drone,
-    geo: Map<number, { rect: Rect; center: Vec; slots: Vec[]; radius: number }>,
+    geo: Map<number, StationGeo>,
     slotOf: Map<number, number>,
     holdSlot: ReturnType<typeof holdingSlots>['slots'],
     seconds: number,
@@ -1083,18 +1169,23 @@ export class MapRenderer {
     if (d.state === DroneState.Fly && Math.hypot(d.tx - x, d.ty - y) < 0.5) h = this.headings.get(d.id) ?? h;
     this.headings.set(d.id, h);
     const cargo = d.onboard.length === 0 ? 0 : d.load >= 2 || d.onboard.length >= 2 ? 2 : 1;
+    const frameIndex = Math.floor(seconds * 16 + d.id * 3) % SPIN_FRAMES;
     if (parked) {
       const spr = P.parked.next();
+      // 已接单、等起降口放行的飞机还在停机位上，图和停着不动的一样，停机位和起降口之间画一条短线，站点旁写架数。
+      // 最小的镜头缩放下旋翼盘只有一个像素，转动看不出来，所以不为它另画旋翼的帧。等得不满 TAKEOFF_GRACE_STEPS 步的不算
+      const waiting = showsTakeoffWait(d, nowSteps);
       spr.texture = this.atlas.drone(color, 0, 0, false, low);
       spr.anchor.set(0.5, 0.5);
       spr.position.set(bp.x, bp.y);
       spr.rotation = board.angle;
       spr.scale.set(scale);
+      if (waiting) this.stats.waiting = (this.stats.waiting ?? 0) + 1;
+      if (waiting && station !== undefined && slotPos !== undefined) this.placeLink(slotPos, station.gate, board, P);
       return;
     }
     // 飞起来之后才放大：停在停机位上的飞机跟着屋顶的大小走，升空时越高放得越大
     const drawScale = scale * (1 + (U.drone - 1) * Math.min(1, altitude));
-    const frameIndex = Math.floor(seconds * 16 + d.id * 3) % SPIN_FRAMES;
     const spr = P.drones.next();
     spr.texture = this.atlas.drone(color, cargo, frameIndex, casing, low);
     spr.anchor.set(0.5, 0.5);
@@ -1110,6 +1201,28 @@ export class MapRenderer {
       sh.scale.set(drawScale);
       sh.alpha = this.theme.shadowAlpha;
     }
+  }
+
+  /**
+   * 等起飞的飞机：从它的停机位朝起降口的环画一条短线，到最外一道环为止，纸白，窄窄的一条。线宽随镜头缩放放大，和航线一样。
+   * 停机位本来就在环里面时不画。
+   */
+  private placeLink(from: Vec, gate: StationGeo['gate'], board: Board, P: MapRenderer['pools']): void {
+    const a = board.toBoard(from.x, from.y);
+    const dx = gate.x - a.x;
+    const dy = gate.y - a.y;
+    const length = Math.hypot(dx, dy) - gate.rim;
+    if (length < LINK_MIN) return;
+    const link = P.links.next();
+    link.texture = Texture.WHITE;
+    link.tint = hexToInt(this.theme.pal.paper);
+    link.anchor.set(0, 0.5);
+    link.position.set(a.x, a.y);
+    link.rotation = Math.atan2(dy, dx);
+    link.width = length;
+    link.height = LINK_WIDTH * this.units.line;
+    link.alpha = LINK_ALPHA;
+    this.stats.links = (this.stats.links ?? 0) + 1;
   }
 
   /**
@@ -1145,49 +1258,35 @@ export class MapRenderer {
   }
 
   /**
-   * 站点上空「{n} 架等降落」的字：先试圈的正上方，再试右上、左上、下面、两侧，取压住别的东西最少的位置，
-   * 躲开站点屋顶、店的门面和票杆、店名、已经放好的字，也尽量不出画面。
+   * 站点旁的字：「{n} 架等待起飞」和「{n} 架等待降落」，有哪条写哪条，两条都有时上下叠成一块，等待起飞在上，居中对齐，
+   * 所以两条不会互相压住。整块先试圈的正上方，再试右上、左上、下面、两侧，取压住别的东西最少的位置，
+   * 躲开站点屋顶（站号在屋顶上）、店的门面和票杆、店名、已经放好的字，也尽量不出画面。
    */
-  private placeHoldLabels(list: readonly { cx: number; cy: number; radius: number; count: number }[], occupied: readonly Rect[], pool: Pool<Text>): void {
+  private placeHoldLabels(list: readonly HoldTag[], occupied: readonly Rect[], pool: Pool<Text>): void {
     const placed: Rect[] = [];
     const view: Rect = this.content ?? this.visible();
     const k = this.units.text;
-    for (const h of list) {
-      const text = pool.next();
-      const label = fmt(STR.hud.holding, { count: h.count });
-      if (text.text !== label) text.text = label;
-      text.anchor.set(0.5, 0.5);
-      text.rotation = 0;
-      text.scale.set(k);
-      const w = text.width;
-      const ht = text.height;
-      const r = h.radius;
-      const candidates: Vec[] = [
-        { x: h.cx - 6 * k, y: h.cy - r - 14 * k },
-        { x: h.cx + r * 0.75 + w / 2 - 20 * k, y: h.cy - r * 0.9 - 8 * k },
-        { x: h.cx - r * 0.75 - w / 2 + 20 * k, y: h.cy - r * 0.9 - 8 * k },
-        { x: h.cx - 6 * k, y: h.cy + r + 16 * k },
-        { x: h.cx + r + w / 2 + 6 * k, y: h.cy },
-        { x: h.cx - r - w / 2 - 6 * k, y: h.cy },
-        { x: h.cx + r * 0.75 + w / 2 - 20 * k, y: h.cy + r * 0.9 + 10 * k },
-        { x: h.cx - r * 0.75 - w / 2 + 20 * k, y: h.cy + r * 0.9 + 10 * k },
-      ];
-      let best = candidates[0] as Vec;
-      let bestScore = Infinity;
-      for (const c of candidates) {
-        const box: Rect = { x: c.x - w / 2, y: c.y - ht / 2, w, h: ht };
-        let score = 0;
-        for (const o of occupied) score += overlapArea(box, o);
-        for (const o of placed) score += 3 * overlapArea(box, o);
-        score += 4 * (w * ht - overlapArea(box, view));
-        if (score < bestScore) {
-          bestScore = score;
-          best = c;
-          if (score === 0) break;
-        }
+    for (const tag of list) {
+      const texts: Text[] = [];
+      for (const [template, count] of [[STR.hud.takeoffQueue, tag.takeoff], [STR.hud.holding, tag.hold]] as const) {
+        if (count <= 0) continue;
+        const text = pool.next();
+        const label = fmt(template, { count });
+        if (text.text !== label) text.text = label;
+        text.anchor.set(0.5, 0.5);
+        text.rotation = 0;
+        text.scale.set(k);
+        texts.push(text);
       }
-      text.position.set(best.x, best.y);
-      placed.push({ x: best.x - w / 2, y: best.y - ht / 2, w, h: ht });
+      if (texts.length === 0) continue;
+      const block = stackLines(
+        texts.map((t) => ({ w: t.width, h: t.height })),
+        LABEL_LINE_GAP * k,
+      );
+      const oneLine = (texts[0] as Text).height;
+      const spot = pickLabelSpot(labelSpots(tag, block.w, k, block.h - oneLine), block.w, block.h, occupied, placed, view);
+      texts.forEach((t, i) => t.position.set(spot.x + (block.centers[i] as Vec).x, spot.y + (block.centers[i] as Vec).y));
+      placed.push({ x: spot.x - block.w / 2, y: spot.y - block.h / 2, w: block.w, h: block.h });
     }
   }
 

@@ -26,7 +26,9 @@
 //   shortfall 还差多少钱  cost 费用  district 片区  previous 上一片区  station 站号（汉字，用 stationNumeral）
 //   count 数量  seconds 秒数  day 第几天  time 时刻  peak 高峰名  star 星级  limit 上限
 //   onTime 准时率  cancelRate 取消率  needOnTime 要求的准时率  needCancelRate 要求的取消率
-//   marginText needText 片区纸条补充行的两段文字（已经填好的句子）
+//   level 起降口等级  after twin 效果记录里现在的数和不购买时的数（核心存原始的数，界面里秒数和单数保留一位小数，百分数取整数）
+//   marginText needText 片区纸条补充行的两段文字（已经填好的句子）  text 改装单里适用条件和对应指标的一段文字
+//   runs better worse 推演的订单序列数，更好和更差的次数  option 推演的选项名称  column 调度台的栏名  card 卡名  reason 失败原因
 //
 // 这里的文字不用分号和破折号，不出现程序内部的名称。
 
@@ -127,8 +129,9 @@ export const STR = {
   hud: {
     // 左上小票
     ticket: '资金　¥{balance}　今日收入 ¥{earned}',
-    // 日程纸条。午高峰、晚高峰两个标签用 PEAKS
-    schedule: { dayTime: '第 {day} 天　{time}' },
+    // 日程纸条。午高峰、晚高峰两个标签用 PEAKS。
+    // 运力占用带在时间轴下面：busyLabel 写在带的起点，鼠标停在带上时显示 busyHint
+    schedule: { dayTime: '第 {day} 天　{time}', busyLabel: '运力占用', busyHint: '显示昨日各时段执行任务或充电的无人机比例' },
     // 速度纸条
     speed: { pause: '暂停', x1: '1×', x2: '2×', x3: '3×', menu: '菜单' },
     // 价签
@@ -157,6 +160,8 @@ export const STR = {
     },
     // 站点上空
     holding: '{count} 架等待降落',
+    // 站点旁，与上一条并列：已接单、等起降口放行的无人机
+    takeoffQueue: '{count} 架等待起飞',
     // 票杆旁
     overflow: '+{count}',
     // 订单悬停
@@ -180,13 +185,54 @@ export const STR = {
       dorm: '{index} 号宿舍楼',
       place: '{district} {name}',
     },
+    // 改装单里每个节点说明下面的两行：适用条件和对应指标。{text} 是各节点自己的文字，见 upgrades 里的 when 和 metric
+    upgradeLines: { when: '适用条件　{text}', metric: '对应指标　{text}' },
     // 选中一座站时旁边的小卡。
-    // 站号写成「{station}号站」，{station} 用 stationNumeral，等降落的架数用上面的 holding
+    // 站号写成「{station}号站」，{station} 用 stationNumeral，等降落的架数用上面的 holding，等起飞的架数用 takeoffQueue。
+    // 下面是最近一场高峰里这座站的一行（recent 是块的标题，{peak} 用高峰名），没有这座站的记录时只写 none，
+    // 再下面是本站可购买的几项（buyTitle），文字沿用价签和改装的名称。机队时间构成的文字在 summary.fleet
     card: {
       title: '{station}号站',
       bays: '停机位 {count}/{limit}',
       drones: '无人机 {count} 架',
       gate: '起降口 {level} 级',
+      recent: '最近一场{peak}',
+      none: '暂无高峰记录',
+      gateWait: '起降排队　{seconds} 秒',
+      gateWaitNone: '起降排队　无数据',
+      landWait: '等待降落　平均 {count} 架',
+      sorties: '派出架次　{count}',
+      buyTitle: '本站可购买',
+    },
+    // 数据员的推演：入口按钮，改装单顶部的次数，推演单上的各行。option 是推演的选项名称，{station} 用 stationNumeral，
+    // {level} 是起降口升到的等级，{column} 是调度台的栏名，{card} 是卡名，{peak} 是高峰名。
+    // 推演单上准时订单的平均值保留一位小数，收入取整数。平均值的绝对值小于 0.05 单或 0.5 元时写持平
+    forecast: {
+      button: '推演',
+      charges: '推演次数 {count}/{max}',
+      running: '推演中',
+      title: '推演　{option}',
+      tally: '{runs} 次中 {better} 次更好，{worse} 次更差',
+      onTimeMore: '准时订单平均多 {count} 单',
+      onTimeLess: '准时订单平均少 {count} 单',
+      onTimeSame: '准时订单平均持平',
+      revenueMore: '收入平均增加 ¥{amount}',
+      revenueLess: '收入平均减少 ¥{amount}',
+      revenueSame: '收入平均持平',
+      unclear: '差别不明显',
+      scope: '统计至第二场高峰小结',
+      failed: '无法推演　{reason}',
+      option: {
+        addBay: '{station}号站新增停机位',
+        addDrone: '{station}号站购买无人机',
+        gate: '{station}号站起降口 {level} 级',
+        doubleBox: '双层货箱',
+        nearestBuy: '就近降落',
+        nearestOn: '开启就近降落',
+        nearestOff: '关闭就近降落',
+        card: '{column}改为{card}',
+        cardInPeak: '{peak}{column}改为{card}',
+      },
     },
   },
 
@@ -236,13 +282,35 @@ export const STR = {
     },
   },
 
-  /** 改装 */
+  /**
+   * 改装。每个节点有名称、说明、适用条件（when）和对应指标（metric），后两项写在说明下面，模板见 hud.upgradeLines。
+   * 没开放的节点多一条 locked，写开放的条件。这里的每一项都带 desc，不放别的类型的文字
+   */
   upgrades: {
     // 名称里的价格是 {price} 参数，由界面从核心取
-    doubleBox: { name: '双层货箱 ¥{price}', desc: '每趟可携带两单，大单占满两层' },
-    gate2: { name: '起降口 2 级 ¥{price}', desc: '起降间隔从 1.2 秒缩短至 0.8 秒' },
-    gate3: { name: '起降口 3 级 ¥{price}', desc: '起降间隔缩短至 0.4 秒，可两架同时起降' },
-    nearbyLanding: { name: '就近降落 ¥{price}', desc: '无人机送达后降落在最近的有空闲停机位的站点', locked: NEED_TWO_STATIONS },
+    doubleBox: { name: '双层货箱 ¥{price}', desc: '每趟可携带两单，大单占满两层', when: '同一店铺或顺路的订单较多', metric: '每趟单数' },
+    gate2: { name: '起降口 2 级 ¥{price}', desc: '起降间隔从 1.2 秒缩短至 0.8 秒', when: '站点有无人机等待起飞或降落', metric: '起降排队秒数、等待降落架数' },
+    // 这座站还没到 2 级时，3 级一行写 locked，不能点
+    gate3: {
+      name: '起降口 3 级 ¥{price}',
+      desc: '起降间隔缩短至 0.4 秒，可两架同时起降',
+      when: '起降口 2 级时仍有无人机排队',
+      metric: '起降排队秒数、等待降落架数',
+      locked: '需要先升级至起降口 2 级',
+    },
+    // 买下之后这一行变成开关：名称不带价格（ownedName），第二行写现在的状态（ownedOn、ownedOff），旁边是切换的按钮（turnOn、turnOff）
+    nearbyLanding: {
+      name: '就近降落 ¥{price}',
+      desc: '无人机送达后降落在最近的有空闲停机位的站点',
+      when: '各站起降口均为 3 级，只有两个站点时配合全站协同',
+      metric: '回站飞行占比',
+      locked: NEED_TWO_STATIONS,
+      ownedName: '就近降落',
+      ownedOn: '已开启',
+      ownedOff: '已关闭',
+      turnOn: '开启',
+      turnOff: '关闭',
+    },
   },
 
   /** 高峰小结。一张长小票，数字各占一行，这里只放文字，对齐由界面排。 */
@@ -256,6 +324,10 @@ export const STR = {
     deltaHeader: '较昨日（百分点）',
     timeHeader: '单均耗时构成',
     segments: { waitDrone: '等待无人机 {share}%', waitGate: '起降排队 {share}%', waitPrep: '等待出餐 {share}%', road: '在途 {share}%' },
+    // 机队时间构成：一场高峰里全部无人机的时间分在哪五段，五个数加起来是 100。作业包括等待出餐，排队包括等待起飞和等待降落。
+    // 站点小卡里本站的同一项用同样的标题和文字
+    fleetHeader: '机队时间构成',
+    fleet: { loaded: '载货飞行 {share}%', empty: '空载飞行 {share}%', work: '作业 {share}%', queue: '排队 {share}%', parked: '停放 {share}%' },
     // 这一段先写当前策略卡的名称，再写下面两行。一场高峰里换过策略时只写 switched
     early: { count: '{count} 单', suffix: '较按下单顺序提前派出', switched: '本场中途调整过策略' },
     // 说明的主句，取第一个满足条件的
@@ -270,8 +342,10 @@ export const STR = {
     },
     // 说明的附加句，最多一句
     extra: {
+      takeoffWait: '{station}号站有 {percent}% 的时间有无人机等待起飞。',
       landQueue: '{station}号站平均有 {count} 架无人机等待降落。',
       bayIdle: '{station}号站的停机位有 {percent}% 的时间空闲。',
+      emptyFlight: '本场无人机有 {percent}% 的时间空载飞行。',
       notNearest: '{percent}% 的订单由非最近站点配送。',
       districtLow: '{district}准时率 {onTime}%。',
     },
@@ -300,6 +374,13 @@ export const STR = {
     dropByOnTime: '{district}近两日准时率 {onTime}%，低于保星线 {needOnTime}%，明日日结仍未达标将降一星。',
     dropByCancel: '{district}近两日取消率 {cancelRate}%，未低于保星要求的 {needCancelRate}%，明日日结仍未达标将降一星。',
     starDown: '{district}降至{star}星，明日订单量减少 20%。',
+    // 效果记录：购买改装之后的几次日结里，每笔购买写两句。第一句是改装的名称，第二句是这项改装对应的指标，写现在的数值和不购买时同一场高峰的数值。日结小票上这两句分成两行。键与核心的 EffectKind 一致。
+    // {station} 用 stationNumeral，{level} 是起降口的等级，{after} 是现在的数，{twin} 是不购买时的数。秒数和单数保留一位小数，百分数取整数
+    effect: {
+      gate: '{station}号站起降口 {level} 级。起降排队 {after} 秒，不升级时 {twin} 秒。',
+      doubleBox: '双层货箱。每趟 {after} 单，不购买时 {twin} 单。',
+      nearest: '就近降落。回站飞行 {after}%，不开启时 {twin}%。',
+    },
   },
 
   /** 引导便签。注释是出现的时机。 */
@@ -314,7 +395,9 @@ export const STR = {
     boardReady: '调度台已解锁。',
     // 第一次日结之后，资金达到价签开放的数（内容表 UNLOCKS_V1.priceTagsBalance）
     canAddBay: '可新增停机位，再购买无人机。',
-    // 第一次有站点在一场高峰里平均有不少于 1 架无人机等待降落
+    // 与上一条同时：价签开放时数据员到岗，推演不收费
+    dataClerk: '数据员已到岗。点击「推演」，比较购买与不购买的结果。',
+    // 第一次有站点在一场高峰里有无人机排队（等待起飞或等待降落）的时间大于一成，内容表 NOTES_V1.gateBusyPct
     gateBusy: '{station}号站起降拥堵，可在改装中升级起降口。',
     // 老街三星
     openOffice: '写字楼区已可开通。',
@@ -326,6 +409,9 @@ export const STR = {
     refundAvailable: '当日购买可退，退还 ¥{refund}。',
     refunded: '已退还 ¥{refund}。',
     districtOpened: '{district}已开通。',
+    // 改装单里切换就近降落的开关之后
+    nearestOn: '就近降落已开启。',
+    nearestOff: '就近降落已关闭。',
     saved: '已保存。',
     saveCorrupt: '存档已损坏，已恢复为 {savedAt} 的备份。',
     awayIncome: '获得离线收益 ¥{amount}。',
@@ -353,6 +439,7 @@ export const STR = {
     notEnoughMoney: '资金不足，还差 ¥{shortfall}',
     // 没有空停机位，屋顶还能加
     noFreeBay: '该站点没有空闲停机位',
+    bayTotalFull: '无人机总数已达停机位总数',
     // 没有空停机位，屋顶已经放满
     bayLimitReached: '停机位已达上限（{limit} 个）',
     // 没有选中站点
@@ -381,12 +468,14 @@ export const STR = {
     alreadyOwned: '已购买',
     // 价签还没开放时买东西。界面在开放前不显示价签，这条很少出现
     priceTagsLocked: '第一天日结后、资金达到 ¥{amount} 时解锁',
-    // 双层货箱还没开放
-    doubleBoxLocked: '停机位已满且无人机不足时解锁',
+    // 双层货箱还没开放。它随价签一起开放，价签没开放时先报价签的原因，所以界面里很少出现这一条
+    doubleBoxLocked: '与价签同时解锁',
     // 片区还没在地图上出现。显示的条件在内容表 UNLOCKS_V1.show 里：{previous} 是要升星的片区，{star} 是星级的汉字
     districtHidden: '{previous}达到{star}星后显示',
-    // 换到一张还没开放的卡
+    // 换到一张还没开放的卡。数据员还没到岗时点推演也用这一条
     ruleLocked: '尚未解锁',
+    // 推演次数用完了。每场高峰结束后加一次
+    noForecastCharge: '推演次数不足',
     // 点了一张已经派出、或者已经点过的订单
     orderNotWaiting: '订单已在配送或已排在最前',
     // 起降口已经是最高级
@@ -429,10 +518,15 @@ export const STR = {
       // 开局策略用的两张卡：调度策略一张，协同策略一张
       cards: '{select}，{zone}',
       row: '准时 {onTime}　取消 {cancelled}　收入 ¥{revenue}',
+      // 准时单数的差不为 0 时，写多或少几单
       more: '准时订单较开局策略多 {count} 单',
       less: '准时订单较开局策略少 {count} 单',
+      // 差的绝对值小于 ⌈内容表 GOALS_V1.compareUnclearK × √这一场的来单数⌉ 时，改写这两句，代替 more 和 less，数照写
+      moreUnclear: '准时订单较开局策略多 {count} 单，差别不明显',
+      lessUnclear: '准时订单较开局策略少 {count} 单，差别不明显',
+      // 准时单数相同
       same: '准时订单与开局策略相同',
-      // 订单不多于运力，两套策略的准时单数相同时写这一句，代替上面三句
+      // 订单不多于运力，两套策略的准时单数相同时写这一句，代替 same
       lowLoad: '本场订单未超出运力，两套策略结果接近',
     },
     // 纪录，写在数的后面

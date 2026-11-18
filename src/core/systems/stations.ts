@@ -1,4 +1,5 @@
 // 站点：停机位和起降口。每座站一个起降口，起飞和降落共用一个先到先办的队列。
+import { recordSortie } from '../campaign/fleet.ts';
 import { DroneState, LAND_STEPS, LOW_BATTERY, RANGE, STEPS_PER_SECOND, TAKEOFF_STEPS } from '../constants.ts';
 import type { Drone, Order, SimConfig, SimState, Station } from '../types.ts';
 import { dist } from '../world.ts';
@@ -49,6 +50,7 @@ export function runGates(state: SimState): void {
     if (d.state === DroneState.TakeoffQueue) {
       d.state = DroneState.Takeoff;
       d.tEnd = now + TAKEOFF_STEPS;
+      recordSortie(state, s.id); // 经营模式里记一次放行起飞，只在高峰窗口内计
       for (const stop of d.route) {
         const order = state.orders[stop.order] as Order;
         order.gateWait = now - order.tAssign;
@@ -80,6 +82,24 @@ export function fleetOf(state: SimState, station: number): number {
   return n;
 }
 
+/** 全城没有退回的飞机数。 */
+export function droneCount(state: SimState): number {
+  let n = 0;
+  for (const d of state.drones) if (!d.removed) n++;
+  return n;
+}
+
+/**
+ * 全城没有退回的站的停机位总数。
+ * 一座站归属的飞机可以多于它的停机位，所以每座站各自的数目不是上限，飞机总数不超过这个总数才是：
+ * 超过之后总有一架飞机回站时所有的站都没有空位，只能在上空盘旋。
+ */
+export function bayCount(state: SimState): number {
+  let n = 0;
+  for (const s of state.stations) if (!s.removed) n += s.bays;
+  return n;
+}
+
 /** 已经预约了这座站、正在飞来或在上空等降落的飞机数。降落开始时预约取消，占用数加一。 */
 export function inboundTo(state: SimState, station: number): number {
   let n = 0;
@@ -108,16 +128,23 @@ export function backDistance(state: SimState, d: Pick<Drone, 'home'>, x: number,
   return dist(x, y, home.x, home.y);
 }
 
+/** 这座站现在有没有空着的停机位给一架回来的飞机：占用数加预约数小于停机位数。 */
+export function hasFreeBay(state: SimState, s: Station): boolean {
+  return s.occupied + inboundTo(state, s.id) < s.bays;
+}
+
 /**
  * 就近降落：飞机现在所在的位置离哪座站最近，就飞去哪座，但这座站的停机位不能满（占用数加预约数小于停机位数）。
  * 最近的站满了就依次找下一座，都满了回归属站。距离相同取编号小的。
+ * 飞机总数不超过停机位总数时（买飞机、退停机位、退站点的命令按这一条检查），选站的这架飞机之外的飞机至多占着或预约了总数减一个停机位，
+ * 总有一座站有空位，回归属站只是兜底。
  */
 export function nearestFreeStation(state: SimState, d: Drone): number {
   let best = -1;
   let bestDist = Infinity;
   for (const s of state.stations) {
     if (s.removed) continue;
-    if (s.occupied + inboundTo(state, s.id) >= s.bays) continue;
+    if (!hasFreeBay(state, s)) continue;
     const away = dist(d.x, d.y, s.x, s.y);
     if (away < bestDist) {
       best = s.id;

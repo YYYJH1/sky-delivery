@@ -1,4 +1,6 @@
 // 每步的统计累计：各站每秒有多少架飞机在等降落、有多少停机位是空的。
+// 经营模式里还累计机队时间和排队的计数（campaign/fleet.ts），沙盒模式不做。
+import { recordFleet } from '../campaign/fleet.ts';
 import { DroneState, STEPS_PER_SECOND } from '../constants.ts';
 import type { SimState } from '../types.ts';
 
@@ -30,4 +32,5 @@ export function recordStats(state: SimState): void {
     empty[second] = (empty[second] as number) + (s.bays - s.occupied);
     total[second] = (total[second] as number) + s.bays;
   }
+  recordFleet(state);
 }

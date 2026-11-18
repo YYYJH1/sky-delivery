@@ -6,7 +6,6 @@ import {
   DAY_STEPS,
   UNLOCK_KEYS,
   advance,
-  anyStationAtCap,
   createState,
   isUnlocked,
   quoteCommand,
@@ -223,72 +222,101 @@ describe('「调度策略」一栏：高峰小结里超时的订单超过来单�
   });
 });
 
-describe('双层货箱：停机位到屋顶上限之后，某场高峰小结的主句是「订单主要在等飞机」时开放', () => {
-  /** 开局的站在中屋顶上，上限 9 个停机位。价签开放，双层货箱没开放。 */
-  function boxState(bays: number): SimState {
+describe('双层货箱：随价签一起开放，不看停机位，也不看小结', () => {
+  const BALANCE = UNLOCKS_V1.priceTagsBalance;
+
+  /** 价签开放、双层货箱没开放：版本 3 以前的规则留下的局面，开局的站在中屋顶上，停机位还没加满。 */
+  function legacyState(): SimState {
     const state = withMoney(quietState());
     campaignOf(state).unlocks.doubleBox = -1;
-    while ((state.stations[0] as { bays: number }).bays < bays) must(state, { type: 'buyBay', station: 0 });
     return state;
   }
 
-  /** 等飞机最长的一场：10 张订单都等了 24 秒才派出，6 张准时，4 张超时，准时率 60%。 */
-  const WAITING = { onTime: 6, late: 4, waiting: 240 };
+  /** 第一次日结时余额刚好够，价签在日结的那一步开放。 */
+  function atPriceTags(): SimState {
+    const state = quietState({}, false);
+    advance(state, DAY_STEPS);
+    campaignOf(state).money = BALANCE;
+    step(state); // 第 3600 步：日结
+    return state;
+  }
 
-  it('锁着：双层货箱 doubleBoxLocked，价签没开放时先报价签的原因，余额够也一样', () => {
-    const state = boxState(2);
-    expectRejected(state, { type: 'buyDoubleBox' }, 'doubleBoxLocked');
+  it('价签没开放时双层货箱也锁着，命令先报价签的原因，余额够也一样', () => {
     const locked = lockedState();
+    expect(isUnlocked(locked, 'doubleBox')).toBe(false);
     expectRejected(locked, { type: 'buyDoubleBox' }, 'priceTagsLocked');
   });
 
-  it('停机位到了屋顶上限，并且小结的主句是等飞机：开放，记下小结的那一步', () => {
-    const state = boxState(9);
-    expect(anyStationAtCap(state)).toBe(true);
-    noonSummary(state, WAITING);
-    expect(campaignOf(state).peaks[0]?.main.id).toBe('waitDrone');
-    expect(stepOf(state, 'doubleBox')).toBe(NOON);
+  it('价签开放的那一步双层货箱同时开放，开放的步相同，之后马上能买', () => {
+    const state = atPriceTags();
+    expect(stepOf(state, 'priceTags')).toBe(DAY_STEPS);
+    expect(stepOf(state, 'doubleBox')).toBe(DAY_STEPS);
+    expect(state.capacity).toBe(1);
+    // 第一天的两场小结都说本场无订单，没有哪一场写「订单耗时主要在等待无人机」，双层货箱照样开放
+    expect(campaignOf(state).peaks.map((p) => p.main.id)).toEqual(['noOrders', 'noOrders']);
+    withMoney(state);
     must(state, { type: 'buyDoubleBox' });
     expect(state.capacity).toBe(2);
   });
 
-  it('停机位还没到上限：主句是等飞机也不开放，差一个也不行', () => {
-    const state = boxState(8);
-    expect(anyStationAtCap(state)).toBe(false);
-    noonSummary(state, WAITING);
-    expect(campaignOf(state).peaks[0]?.main.id).toBe('waitDrone');
+  it('不看停机位：站上的停机位远没到屋顶的上限，价签开放之后双层货箱就能买', () => {
+    const state = withMoney(atPriceTags());
+    expect((state.stations[0] as { bays: number }).bays).toBe(ECONOMY_V1.baysAtBuild);
+    expect(quoteCommand(state, { type: 'buyDoubleBox' })).toEqual({ ok: true, reason: null, kind: 'buy', price: ECONOMY_V1.doubleBoxPrice });
+  });
+
+  it('价签是余额达到门槛的那一步开放的，双层货箱同一步开放，不必等下一次日结', () => {
+    const state = quietState({}, false);
+    advance(state, DAY_STEPS);
+    campaignOf(state).money = BALANCE - 0.01;
+    step(state); // 第 3600 步：日结，余额差 0.01
+    expect(isUnlocked(state, 'priceTags')).toBe(false);
     expect(isUnlocked(state, 'doubleBox')).toBe(false);
+    advance(state, 50);
+    campaignOf(state).money = BALANCE;
+    step(state);
+    expect(stepOf(state, 'priceTags')).toBe(DAY_STEPS + 51);
+    expect(stepOf(state, 'doubleBox')).toBe(DAY_STEPS + 51);
+  });
+
+  it('价签已开放、双层货箱没开放的状态（读档的旧存档，或外部改过的状态）：下一步开始时补开，开放的步取这一步', () => {
+    const state = legacyState();
+    expect(isUnlocked(state, 'priceTags')).toBe(true);
     expectRejected(state, { type: 'buyDoubleBox' }, 'doubleBoxLocked');
-  });
-
-  it('到了上限，但小结的主句不是等飞机：不开放', () => {
-    const state = boxState(9);
-    noonSummary(state, { onTime: 10 }); // 准时率 100%，主句写准时率
-    expect(campaignOf(state).peaks[0]?.main.id).toBe('onTimeHigh');
-    expect(isUnlocked(state, 'doubleBox')).toBe(false);
-    const road = boxState(9);
-    noonSummary(road, { onTime: 6, late: 4 }); // 等飞机只有 1 秒，路上最长
-    expect(campaignOf(road).peaks[0]?.main.id).toBe('road');
-    expect(isUnlocked(road, 'doubleBox')).toBe(false);
-  });
-
-  it('先到上限，之后的某一场小结才开放：到上限之前的小结不算', () => {
-    const state = boxState(8);
-    noonSummary(state, WAITING);
-    expect(isUnlocked(state, 'doubleBox')).toBe(false);
-    must(state, { type: 'buyBay', station: 0 }); // 第 9 个，到了上限
-    peakSummaryWith(state, 'evening', WAITING);
-    expect(campaignOf(state).peaks[1]?.main.id).toBe('waitDrone');
-    expect(stepOf(state, 'doubleBox')).toBe(EVENING);
-  });
-
-  it('开放之后不再锁上：停机位退回到上限以下，双层货箱仍然可以买', () => {
-    const state = boxState(9);
-    noonSummary(state, WAITING);
-    must(state, { type: 'refundBay', station: 0 }); // 当天买的停机位当天原价退回
-    expect(anyStationAtCap(state)).toBe(false);
-    expect(isUnlocked(state, 'doubleBox')).toBe(true);
+    state.step = 4321;
+    step(state);
+    expect(stepOf(state, 'doubleBox')).toBe(4321);
     must(state, { type: 'buyDoubleBox' });
+  });
+
+  it('同一个状态，在下一个命令之后也补开：命令执行完立刻检查开放条件', () => {
+    const state = legacyState();
+    must(state, { type: 'buyBay', station: 0 });
+    expect(stepOf(state, 'doubleBox')).toBe(state.step);
+    must(state, { type: 'buyDoubleBox' });
+  });
+
+  it('开放之后不再锁上，也不受价签余额和停机位的影响：余额掉到门槛以下，停机位退回，仍然可以买', () => {
+    const state = withMoney(quietState());
+    must(state, { type: 'buyBay', station: 0 });
+    must(state, { type: 'refundBay', station: 0 }); // 当天买的停机位当天原价退回
+    expect(isUnlocked(state, 'doubleBox')).toBe(true);
+    const before = stepOf(state, 'doubleBox');
+    campaignOf(state).money = ECONOMY_V1.doubleBoxPrice;
+    step(state);
+    expect(stepOf(state, 'doubleBox')).toBe(before); // 开放的步不会被改写
+    must(state, { type: 'buyDoubleBox' });
+    expect(state.capacity).toBe(2);
+  });
+
+  it('高峰小结不再开放它：小结的主句是等飞机，停机位也到了上限（版本 3 以前的条件），双层货箱仍然锁着，要等价签', () => {
+    const state = withMoney(quietState({}, false));
+    (state.stations[0] as { bays: number }).bays = 9; // 开局的站在中屋顶上，上限 9 个停机位
+    noonSummary(state, { onTime: 6, late: 4, waiting: 240 });
+    expect(campaignOf(state).peaks[0]?.main.id).toBe('waitDrone');
+    expect(isUnlocked(state, 'priceTags')).toBe(false);
+    expect(isUnlocked(state, 'doubleBox')).toBe(false);
+    expectRejected(state, { type: 'buyDoubleBox' }, 'priceTagsLocked');
   });
 });
 
@@ -701,7 +729,7 @@ describe('开放的记录', () => {
   it('开局全部没开放，每项记的是开放的步，-1 表示没开放', () => {
     const state = quietState({}, false);
     expect(UNLOCK_KEYS.map((key) => stepOf(state, key))).toEqual(UNLOCK_KEYS.map(() => -1));
-    expect(UNLOCK_KEYS.length).toBe(11);
+    expect(UNLOCK_KEYS.length).toBe(12);
   });
 
   it('沙盒模式没有开放这回事，一律当作开放', () => {

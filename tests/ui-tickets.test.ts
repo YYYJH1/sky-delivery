@@ -1,10 +1,11 @@
 // 高峰小结和日结两张长小票的版式数据：各行写什么，哪一列要不要显示，提前派出那一段的三种情况，说明句，各种片区行。
 // 日结里的准时率线、退单率线、订单的下限取自内容表（STARS_V1），内容表重新校准之后这里不用改。
 import { describe, expect, it } from 'vitest';
+import { GOALS_V1 } from '../src/content/goals_v1.ts';
 import { STARS_V1 } from '../src/content/stars_v1.ts';
 import { DAY_STEPS, advance } from '../src/core/index.ts';
-import type { DayDistrictRecord, DayRecord, ExtraSentence, MainSentence, PeakBaseline, PeakRecord, PeakStanding, Standing } from '../src/core/index.ts';
-import { compareBlock, dayEndTicket, dayLines, extraSentence, gainTotalLine, latestDayEnd, latestSummary, mainSentence, recordNote, summaryTicket, tenCells } from '../src/ui/tickets.ts';
+import type { DayDistrictRecord, DayRecord, ExtraSentence, MainSentence, PeakBaseline, PeakFleet, PeakRecord, PeakStanding, Standing } from '../src/core/index.ts';
+import { compareBlock, compareThreshold, dayEndTicket, dayLines, extraSentence, fleetBlock, gainTotalLine, latestDayEnd, latestSummary, mainSentence, recordNote, summaryTicket, tenCells } from '../src/ui/tickets.ts';
 import { campaignOf, campaignState, runningState } from './campaign-helpers.ts';
 
 /** 升到 star 星的条件，二星到五星。 */
@@ -34,6 +35,9 @@ function peak(patch: Partial<PeakRecord> = {}): PeakRecord {
     extra: null,
     cleared: null,
     baseline: null,
+    fleet: null,
+    fleetBack: null,
+    stations: [],
     ...patch,
   };
 }
@@ -57,7 +61,7 @@ function dayLine(patch: Partial<DayDistrictRecord> = {}): DayDistrictRecord {
 }
 
 function day(patch: Partial<DayRecord> = {}): DayRecord {
-  return { day: 0, step: DAY_STEPS, ordered: 37, resolved: 36, onTime: 17, late: 17, cancelled: 2, pending: 1, income: 193.4, districts: [dayLine()], peaksJudged: 0, peaksCleared: 0, ...patch };
+  return { day: 0, step: DAY_STEPS, ordered: 37, resolved: 36, onTime: 17, late: 17, cancelled: 2, pending: 1, income: 193.4, districts: [dayLine()], peaksJudged: 0, peaksCleared: 0, busy: null, effects: [], ...patch };
 }
 
 describe('高峰小结：标题和各行', () => {
@@ -209,21 +213,22 @@ describe('高峰小结：与开局策略的对照', () => {
     expect(JSON.stringify(view)).not.toContain('比昨天');
   });
 
+  // 来单 148 单，门槛是 ⌈0.8 × √148⌉ = 10。多 15 单不小于门槛，不加「差别不明显」
   it('有对照：开局策略的卡，准时、取消、收入，比它多准时几单，各片区一行', () => {
-    const view = summaryTicket(peak({ onTime: 121, baseline: baseline() }), 0, true);
+    const view = summaryTicket(peak({ onTime: 130, baseline: baseline() }), 0, true);
     expect(view.compare).toEqual({
       header: '开局策略',
       cards: '先到先送，全站协同',
       row: '准时 115　取消 5　收入 ¥987',
-      gain: '准时订单较开局策略多 6 单',
+      gain: '准时订单较开局策略多 15 单',
       record: null,
       districts: [{ name: '老街', pct: '77%', bar: '■■■■■■■□□□', noOrders: false, goal: null, mark: null }],
     });
   });
 
   it('比开局策略少准时：写少准时几单，不写纪录', () => {
-    const block = compareBlock(peak({ onTime: 110, baseline: baseline() }), standingWith({ value: -5, best: 3, broken: false }));
-    expect(block?.gain).toBe('准时订单较开局策略少 5 单');
+    const block = compareBlock(peak({ onTime: 100, baseline: baseline() }), standingWith({ value: -15, best: 3, broken: false }));
+    expect(block?.gain).toBe('准时订单较开局策略少 15 单');
     expect(block?.record).toBeNull();
   });
 
@@ -233,20 +238,164 @@ describe('高峰小结：与开局策略的对照', () => {
   });
 
   it('订单不多于运力，但准时单数不同：照写多或少几单，不写那一句说明', () => {
-    expect(compareBlock(peak({ onTime: 116, baseline: baseline({ lowLoad: true }) }), null)?.gain).toBe('准时订单较开局策略多 1 单');
+    expect(compareBlock(peak({ onTime: 116, baseline: baseline({ lowLoad: true }) }), null)?.gain).toBe('准时订单较开局策略多 1 单，差别不明显');
+    expect(compareBlock(peak({ onTime: 114, baseline: baseline({ lowLoad: true }) }), null)?.gain).toBe('准时订单较开局策略少 1 单，差别不明显');
+    expect(compareBlock(peak({ onTime: 130, baseline: baseline({ lowLoad: true }) }), null)?.gain).toBe('准时订单较开局策略多 15 单');
   });
 
   it('多准时的纪录：只在多准时的时候写，破了写新纪录', () => {
-    const more = peak({ onTime: 121, baseline: baseline() });
-    expect(compareBlock(more, standingWith({ value: 6, best: 9, broken: false }))?.record).toEqual({ text: '纪录 9', fresh: false });
-    expect(compareBlock(more, standingWith({ value: 6, best: 2, broken: true }))?.record).toEqual({ text: '新纪录', fresh: true });
-    expect(compareBlock(more, standingWith({ value: 6, best: null, broken: false }))?.record).toBeNull();
+    const more = peak({ onTime: 130, baseline: baseline() });
+    expect(compareBlock(more, standingWith({ value: 15, best: 20, broken: false }))?.record).toEqual({ text: '纪录 20', fresh: false });
+    expect(compareBlock(more, standingWith({ value: 15, best: 2, broken: true }))?.record).toEqual({ text: '新纪录', fresh: true });
+    expect(compareBlock(more, standingWith({ value: 15, best: null, broken: false }))?.record).toBeNull();
     expect(compareBlock(more, null)?.record).toBeNull();
+  });
+
+  // 来单 148，门槛 10：多 9 单加「差别不明显」，多 10 单和 15 单不加。差别不明显的多准时不算纪录，不写纪录的小字
+  it('句末加了「差别不明显」的多准时不写纪录的小字：破了纪录和有旧纪录都一样', () => {
+    const unclear = peak({ onTime: 124, baseline: baseline() });
+    expect(compareBlock(unclear, standingWith({ value: 9, best: 2, broken: true }))?.gain).toBe('准时订单较开局策略多 9 单，差别不明显');
+    expect(compareBlock(unclear, standingWith({ value: 9, best: 2, broken: true }))?.record).toBeNull();
+    expect(compareBlock(unclear, standingWith({ value: 9, best: 20, broken: false }))?.record).toBeNull();
+    expect(compareBlock(unclear, standingWith({ value: 9, best: null, broken: false }))?.record).toBeNull();
+    // 经小结的版面数据也一样：纪录的成绩一路传到对照那一块
+    const view = summaryTicket(unclear, 0, true, standingWith({ value: 9, best: 2, broken: true }));
+    expect(view.compare?.gain).toBe('准时订单较开局策略多 9 单，差别不明显');
+    expect(view.compare?.record).toBeNull();
+  });
+
+  it('不加「差别不明显」的多准时照写纪录：差等于门槛 10 单，和多 15 单', () => {
+    for (const onTime of [125, 130]) {
+      const more = peak({ onTime, baseline: baseline() });
+      const gain = onTime - 115;
+      expect(compareBlock(more, standingWith({ value: gain, best: 2, broken: true }))?.gain).toBe(`准时订单较开局策略多 ${gain} 单`);
+      expect(compareBlock(more, standingWith({ value: gain, best: 2, broken: true }))?.record).toEqual({ text: '新纪录', fresh: true });
+      expect(compareBlock(more, standingWith({ value: gain, best: 20, broken: false }))?.record).toEqual({ text: '纪录 20', fresh: false });
+      expect(summaryTicket(more, 0, true, standingWith({ value: gain, best: 20, broken: false })).compare?.record).toEqual({ text: '纪录 20', fresh: false });
+    }
+  });
+
+  it('少准时不写纪录，不论句末有没有「差别不明显」', () => {
+    for (const onTime of [106, 100]) {
+      const less = peak({ onTime, baseline: baseline() });
+      expect(compareBlock(less, standingWith({ value: onTime - 115, best: 3, broken: false }))?.record).toBeNull();
+    }
   });
 
   it('开局策略下某个片区没有订单：写没有订单，没有条', () => {
     const block = compareBlock(peak({ baseline: baseline({ districts: [{ district: 0, n: 0, onTime: 0, pct: null }] }) }), null);
     expect(block?.districts[0]).toEqual({ name: '老街', pct: '无订单', bar: '', noOrders: true, goal: null, mark: null });
+  });
+});
+
+// 门槛是 ⌈GOALS_V1.compareUnclearK × √来单数⌉：准时单数的差不为 0，并且绝对值小于它，照写差几单，句末加「差别不明显」。依据是多套订单序列的模拟：单场的差的标准差约为 0.5 × √来单数。
+describe('高峰小结：对照写「差别不明显」的门槛', () => {
+  const MORE = '准时订单较开局策略多';
+  const LESS = '准时订单较开局策略少';
+  /** 这一场来单 orders 单，准时 onTime 单，开局策略准时 baselineOnTime 单。来单数和准时单数在这里各自取值，不互相约束。 */
+  const gainText = (orders: number, onTime: number, baselineOnTime: number, lowLoad = false): string | undefined => {
+    const baseline: PeakBaseline = { orders, onTime: baselineOnTime, late: 0, lateOpen: 0, cancelled: 0, revenue: 0, districts: [], lowLoad };
+    return compareBlock(peak({ orders, onTime, baseline }), null)?.gain;
+  };
+
+  it('门槛取内容表里的系数乘来单数的平方根，向上取整', () => {
+    expect(GOALS_V1.compareUnclearK).toBe(0.8);
+    const table: readonly (readonly [number, number])[] = [
+      [0, 0],
+      [1, 1],
+      [2, 2],
+      [3, 2],
+      [4, 2],
+      [6, 2],
+      [7, 3],
+      [25, 4],
+      [26, 5],
+      [100, 8],
+      [101, 9],
+      [148, 10],
+      [156, 10],
+      [157, 11],
+      [225, 12],
+      [400, 16],
+    ];
+    for (const [orders, expected] of table) expect(compareThreshold(orders), `来单 ${orders}`).toBe(expected);
+  });
+
+  it('来单数 0 到 3000 的门槛，与整数算式一致：系数 0.8 即 4/5，门槛是使 25 × t² 不小于 16 × 来单数的最小整数 t', () => {
+    expect(GOALS_V1.compareUnclearK).toBe(0.8);
+    for (let orders = 0; orders <= 3000; orders++) {
+      let t = 0;
+      while (25 * t * t < 16 * orders) t += 1;
+      expect(compareThreshold(orders), `来单 ${orders}`).toBe(t);
+    }
+  });
+
+  it('差的绝对值等于门槛减 1 时加「差别不明显」，等于门槛时不加。多和少两个方向相同。来单 148，门槛 10', () => {
+    expect(gainText(148, 124, 115)).toBe(`${MORE} 9 单，差别不明显`);
+    expect(gainText(148, 125, 115)).toBe(`${MORE} 10 单`);
+    expect(gainText(148, 126, 115)).toBe(`${MORE} 11 单`);
+    expect(gainText(148, 106, 115)).toBe(`${LESS} 9 单，差别不明显`);
+    expect(gainText(148, 105, 115)).toBe(`${LESS} 10 单`);
+    expect(gainText(148, 104, 115)).toBe(`${LESS} 11 单`);
+  });
+
+  it('同样差 2 单：来单 6 单时门槛是 2，不加。来单 7 单时门槛是 3，加', () => {
+    expect(gainText(7, 3, 1)).toBe(`${MORE} 2 单，差别不明显`);
+    expect(gainText(7, 1, 3)).toBe(`${LESS} 2 单，差别不明显`);
+    expect(gainText(7, 4, 1)).toBe(`${MORE} 3 单`);
+    expect(gainText(6, 3, 1)).toBe(`${MORE} 2 单`);
+    expect(gainText(6, 1, 3)).toBe(`${LESS} 2 单`);
+  });
+
+  it('门槛恰好是整数时（25 单门槛 4，100 单门槛 8）也是等于门槛时不加，来单多一单门槛才加一', () => {
+    expect(compareThreshold(25)).toBe(4);
+    expect(gainText(25, 18, 15)).toBe(`${MORE} 3 单，差别不明显`);
+    expect(gainText(25, 19, 15)).toBe(`${MORE} 4 单`);
+    expect(compareThreshold(26)).toBe(5);
+    expect(gainText(26, 19, 15)).toBe(`${MORE} 4 单，差别不明显`);
+    expect(gainText(26, 20, 15)).toBe(`${MORE} 5 单`);
+    expect(gainText(100, 60, 53)).toBe(`${MORE} 7 单，差别不明显`);
+    expect(gainText(100, 61, 53)).toBe(`${MORE} 8 单`);
+    expect(gainText(100, 45, 53)).toBe(`${LESS} 8 单`);
+    expect(gainText(100, 46, 53)).toBe(`${LESS} 7 单，差别不明显`);
+  });
+
+  it('各种来单数，差从 1 到门槛加 2：小于门槛的加，不小于的不加', () => {
+    for (const orders of [2, 3, 7, 25, 26, 100, 148, 157, 400, 1000]) {
+      const threshold = compareThreshold(orders);
+      for (let gain = 1; gain <= threshold + 2; gain++) {
+        const unclear = gain < threshold ? '，差别不明显' : '';
+        expect(gainText(orders, 1000 + gain, 1000), `来单 ${orders} 多 ${gain}`).toBe(`${MORE} ${gain} 单${unclear}`);
+        expect(gainText(orders, 1000, 1000 + gain), `来单 ${orders} 少 ${gain}`).toBe(`${LESS} ${gain} 单${unclear}`);
+      }
+    }
+  });
+
+  it('来单数很小：0 单时门槛是 0，1 单时门槛是 1，差为 1 照写，不加「差别不明显」。2 单时差 1 加，差 2 不加', () => {
+    expect(compareThreshold(0)).toBe(0);
+    expect(compareThreshold(1)).toBe(1);
+    // 没有订单时两套策略的准时单数必然相同，下面两行是假设有差时的写法
+    expect(gainText(0, 1, 0)).toBe(`${MORE} 1 单`);
+    expect(gainText(0, 0, 1)).toBe(`${LESS} 1 单`);
+    expect(gainText(1, 1, 0)).toBe(`${MORE} 1 单`);
+    expect(gainText(1, 0, 1)).toBe(`${LESS} 1 单`);
+    expect(gainText(2, 1, 0)).toBe(`${MORE} 1 单，差别不明显`);
+    expect(gainText(2, 0, 1)).toBe(`${LESS} 1 单，差别不明显`);
+    expect(gainText(2, 2, 0)).toBe(`${MORE} 2 单`);
+    expect(gainText(2, 0, 2)).toBe(`${LESS} 2 单`);
+  });
+
+  it('差为 0：写相同，订单不多于运力时写那一句说明，都不加「差别不明显」，与来单数无关', () => {
+    for (const orders of [0, 1, 2, 10, 148, 500]) {
+      expect(gainText(orders, 5, 5), `来单 ${orders}`).toBe('准时订单与开局策略相同');
+      expect(gainText(orders, 5, 5, true), `来单 ${orders}`).toBe('本场订单未超出运力，两套策略结果接近');
+    }
+  });
+
+  it('订单不多于运力，差不为 0：照写多或少几单，门槛的规则相同', () => {
+    expect(gainText(148, 124, 115, true)).toBe(`${MORE} 9 单，差别不明显`);
+    expect(gainText(148, 125, 115, true)).toBe(`${MORE} 10 单`);
+    expect(gainText(148, 105, 115, true)).toBe(`${LESS} 10 单`);
   });
 });
 
@@ -278,6 +427,64 @@ describe('高峰小结：一张单的时间四段', () => {
   });
 });
 
+describe('高峰小结：机队时间构成', () => {
+  const fleet = (patch: Partial<PeakFleet> = {}): PeakFleet => ({ loaded: 20, empty: 36, work: 24, queue: 3, parked: 17, ...patch });
+
+  it('标题和五项，按载货飞行、空载飞行、作业、排队、停放的顺序，带百分数', () => {
+    const view = summaryTicket(peak({ fleet: fleet() }), 0, true);
+    expect(view.fleet?.header).toBe('机队时间构成');
+    expect(view.fleet?.items.map((i) => [i.id, i.text, i.share])).toEqual([
+      ['loaded', '载货飞行 20%', 20],
+      ['empty', '空载飞行 36%', 36],
+      ['work', '作业 24%', 24],
+      ['queue', '排队 3%', 3],
+      ['parked', '停放 17%', 17],
+    ]);
+  });
+
+  it('五项加起来是 100，最长的一项带标记，只有这一项', () => {
+    const block = fleetBlock(fleet());
+    expect(block?.items.reduce((sum, i) => sum + i.share, 0)).toBe(100);
+    expect(block?.items.filter((i) => i.longest).map((i) => i.id)).toEqual(['empty']);
+    expect(fleetBlock(fleet({ loaded: 5, empty: 5, work: 10, queue: 5, parked: 75 }))?.items.filter((i) => i.longest).map((i) => i.id)).toEqual(['parked']);
+  });
+
+  it('并列最长时，标靠前的一项', () => {
+    const tie = fleetBlock(fleet({ loaded: 30, empty: 30, work: 20, queue: 10, parked: 10 }));
+    expect(tie?.items.filter((i) => i.longest).map((i) => i.id)).toEqual(['loaded']);
+    const lateTie = fleetBlock(fleet({ loaded: 10, empty: 10, work: 20, queue: 30, parked: 30 }));
+    expect(lateTie?.items.filter((i) => i.longest).map((i) => i.id)).toEqual(['queue']);
+  });
+
+  it('没有机队时间构成（没有无人机，或者旧记录）：没有这一块', () => {
+    expect(fleetBlock(null)).toBeNull();
+    expect(summaryTicket(peak({ fleet: null }), 0, true).fleet).toBeNull();
+  });
+
+  it('单均耗时构成还在，机队时间构成是它之外另加的一块', () => {
+    const view = summaryTicket(peak({ fleet: fleet() }), 0, true);
+    expect(view.segments?.map((s) => s.id)).toEqual(['waitDrone', 'waitGate', 'waitPrep', 'road']);
+    expect(view.timeHeader).toBe('单均耗时构成');
+    // 没有送达的订单时没有四段时间，机队时间构成仍然有
+    const none = summaryTicket(peak({ segments: null, main: { id: 'noDelivered' }, fleet: fleet() }), 0, true);
+    expect(none.segments).toBeNull();
+    expect(none.fleet?.items).toHaveLength(5);
+  });
+
+  it('整句里没有没填的参数', () => {
+    for (const item of fleetBlock(fleet())?.items ?? []) expect(item.text).not.toMatch(/undefined|NaN|null|\{|\}/);
+  });
+
+  it('真实运行：第一场午高峰的小结里有机队时间构成，五项加起来是 100', () => {
+    const state = runningState(42);
+    advance(state, 1801);
+    const view = latestSummary(state, false);
+    expect(view?.fleet?.items).toHaveLength(5);
+    expect(view?.fleet?.items.reduce((sum, i) => sum + i.share, 0)).toBe(100);
+    expect(view?.fleet?.items.map((i) => i.share)).toEqual(Object.values(campaignOf(state).peaks[0]?.fleet ?? {}));
+  });
+});
+
 describe('高峰小结：说明句', () => {
   it('主句七条', () => {
     const cases: [MainSentence, string][] = [
@@ -290,6 +497,11 @@ describe('高峰小结：说明句', () => {
       [{ id: 'waitPrep' }, '订单耗时主要在等待出餐。'],
     ];
     for (const [main, text] of cases) expect(mainSentence(main)).toBe(text);
+  });
+
+  it('附加句：等待起飞和空载飞行两条', () => {
+    expect(extraSentence({ id: 'takeoffWait', station: 1, percent: 22 })).toBe('二号站有 22% 的时间有无人机等待起飞。');
+    expect(extraSentence({ id: 'emptyFlight', percent: 38 })).toBe('本场无人机有 38% 的时间空载飞行。');
   });
 
   it('附加句四条：站号是核心的编号加一，写成汉字', () => {

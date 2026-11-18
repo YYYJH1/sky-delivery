@@ -57,8 +57,8 @@ interface TipPlace {
   readonly top: number;
 }
 
-/** 页面上能挡住便签的物件：纸条、小票、白板、价签，位置相对 #hud。skip 里的元素，以及包含它们或被它们包含的元素不算。 */
-function hudRects(hud: HTMLElement, origin: DOMRect, skip: readonly Element[]): Rect[] {
+/** 页面上能挡住便签和推演单的物件：纸条、小票、白板、价签、小卡，位置相对 #hud。skip 里的元素，以及包含它们或被它们包含的元素不算。 */
+export function hudRects(hud: HTMLElement, origin: DOMRect, skip: readonly Element[]): Rect[] {
   const out: Rect[] = [];
   for (const node of hud.querySelectorAll('.block, .tag')) {
     if (skip.some((s) => s === node || node.contains(s) || s.contains(node))) continue;

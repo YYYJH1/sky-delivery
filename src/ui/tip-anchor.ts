@@ -17,7 +17,8 @@ export type TipTarget =
 
 /**
  * 每张便签对应的目标，键是便签的 id。
- * 点订单、自动派单贴在小票旁边，变红的订单那一张贴在变红的小票旁边，调度台、价签和开通价签贴在各自旁边。
+ * 点订单、自动派单贴在小票旁边，变红的订单那一张贴在变红的小票旁边，调度台、价签和开通价签贴在各自旁边，
+ * 起降拥堵和数据员的便签贴在改装的价签旁边。
  * 没有对应目标的 id 返回 null，便签贴在日程纸条旁边。
  */
 export function tipTarget(id: string): TipTarget | null {
@@ -32,6 +33,8 @@ export function tipTarget(id: string): TipTarget | null {
     case 'canAddBay':
       return { kind: 'part', part: 'tag-bay' };
     case 'gateBusy':
+    case 'dataClerk':
+      // 数据员的便签说点「推演」，推演的入口在改装单里，贴在改装的价签旁边
       return { kind: 'part', part: 'tag-upgrades' };
     case 'openOffice':
       return { kind: 'part', part: 'open-tag-1' };
@@ -45,7 +48,7 @@ const TIP_EM = 22;
 const TIP_PAD = 36;
 /** 便签最窄、最宽多少设计像素。 */
 export const TIP_MIN_WIDTH = 204;
-export const TIP_MAX_WIDTH = 288;
+export const TIP_MAX_WIDTH = 304;
 /** 便签折行的地方：逗号、句号、顿号、分号、冒号、叹号、问号之后。 */
 const BREAK_AFTER = String.fromCodePoint(0xff0c, 0x3002, 0x3001, 0xff1b, 0xff1a, 0xff01, 0xff1f);
 

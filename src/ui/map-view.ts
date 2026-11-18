@@ -54,6 +54,8 @@ export interface MapView {
   ticketPoints(): readonly TicketPoint[];
   /** 店名在画板上的框，上一帧画出来的，调试用。不画地图时为空。 */
   nameBoxes(): readonly { readonly shop: number; readonly x: number; readonly y: number; readonly w: number; readonly h: number }[];
+  /** 数据员在画板上的外接框，上一帧画出来的，调试用。没到岗，或者不画地图时为空。 */
+  clerkBoxes(): readonly { readonly x: number; readonly y: number; readonly w: number; readonly h: number }[];
   /** 渲染器的统计，调试用。不画地图时都是 0。 */
   stats(): RenderStats & { readonly tiles: number };
   /** 窗口大小变了：镜头立刻换，静态层等大小定下来之后重新烘焙一次。 */
@@ -174,6 +176,7 @@ export async function createMapView(opts: MapViewOptions): Promise<MapView> {
     moving: () => director.moving,
     ticketPoints: () => renderer?.ticketPoints ?? [],
     nameBoxes: () => renderer?.nameBoxes ?? [],
+    clerkBoxes: () => renderer?.clerkBoxes ?? [],
     stats: () => ({ ...(renderer?.stats ?? NO_STATS), tiles: renderer?.staticTiles ?? 0 }),
     resize(next) {
       // 窗口大小变了：镜头立刻换成新窗口里的，大小定下来之后再烘焙

@@ -55,6 +55,9 @@ function pushPeak(state: SimState, patch: Partial<PeakRecord>): void {
     extra: null,
     cleared: null,
     baseline: null,
+    fleet: null,
+    fleetBack: null,
+    stations: [],
     ...patch,
   });
 }
@@ -225,6 +228,7 @@ describe('磁贴排成两列', () => {
     rule: null,
     wide: false,
     col: 0,
+    forecast: null,
   });
 
   it('一行两张，先左后右', () => {

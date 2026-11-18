@@ -54,6 +54,10 @@ export const PAY_FLOOR_AT = 2;
 export const DEFAULT_GATE_INTERVAL = 1.2; // 秒，两次动作开始之间的最小间隔
 export const DEFAULT_CHARGE_TIME = 14; // 秒，从空电充满
 
+// ---- 运力占用：全天按时刻分段 ----
+export const BUSY_SEGMENTS = 24; // 一天分 24 段
+export const BUSY_SEGMENT_STEPS = DAY_STEPS / BUSY_SEGMENTS; // 每段 150 步，即 15 秒。第 i 段是天内的第 150i 到 150i + 149 步
+
 // ---- 日程：高峰窗口与小结时刻（天内的步）----
 export const NOON_WINDOW = { start: 600, end: 1500 } as const; // 第 60 到 150 秒
 export const EVENING_WINDOW = { start: 2150, end: 3100 } as const; // 第 215 到 310 秒

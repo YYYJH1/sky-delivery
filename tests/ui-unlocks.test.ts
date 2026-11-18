@@ -3,14 +3,14 @@
 import { describe, expect, it } from 'vitest';
 import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
-import { applyCommand, isUnlocked, quoteCommand, refreshShops, unlock } from '../src/core/index.ts';
+import { applyCommand, isUnlocked, quoteCommand, refreshShops, refreshUnlocks, unlock } from '../src/core/index.ts';
 import { worldToScreen } from '../src/render/camera.ts';
 import { districtModes } from '../src/render/scene.ts';
 import { pickDistrict } from '../src/ui/map-hit.ts';
 import { MAP_PLAN, cameraFor, districtBoxes, shopIsOpen } from '../src/ui/map-state.ts';
 import { candidateRoofs } from '../src/ui/roofs.ts';
 import { openDistrictLabel, openDistrictTags } from '../src/ui/tags.ts';
-import { computeUiData } from '../src/ui/view-model.ts';
+import { computeUiData, upgradeRows } from '../src/ui/view-model.ts';
 import { campaignOf, campaignState, withMoney } from './campaign-helpers.ts';
 
 function data(state: ReturnType<typeof campaignState>): NonNullable<ReturnType<typeof computeUiData>> {
@@ -23,21 +23,29 @@ function data(state: ReturnType<typeof campaignState>): NonNullable<ReturnType<t
 const SURFACE = { board: MAP_PLAN.board, camera: cameraFor({ width: 1920, height: 1080, dpr: 1, uiScale: 1 }) };
 
 describe('价签和改装：开放之前不显示', () => {
-  it('开局：整排价签都不显示，双层货箱不在改装列表里', () => {
+  it('开局：整排价签和改装单都不显示，双层货箱的开放项也没打开', () => {
     const d = data(campaignState());
     expect(d.tagsShown).toBe(false);
     expect(d.doubleBoxShown).toBe(false);
   });
 
-  it('价签开放（第一次日结之后余额达到内容表里价签开放的余额）：价签显示，双层货箱还不显示', () => {
+  it('价签开放（第一次日结之后余额达到内容表里价签开放的余额）：价签和改装单显示。双层货箱随价签开放，核心检查一次之后开放项就打开', () => {
+    const state = campaignState();
+    unlock(state, 'priceTags');
+    expect(data(state).tagsShown).toBe(true);
+    refreshUnlocks(state);
+    expect(data(state).doubleBoxShown).toBe(true);
+  });
+
+  it('价签出现之后改装单总是列出双层货箱，不看双层货箱的开放项', () => {
     const state = campaignState();
     unlock(state, 'priceTags');
     const d = data(state);
-    expect(d.tagsShown).toBe(true);
     expect(d.doubleBoxShown).toBe(false);
+    expect(upgradeRows(d, null).map((r) => r.key)).toContain('doubleBox');
   });
 
-  it('双层货箱开放：改装列表里才有它', () => {
+  it('双层货箱的开放项单独打开：状态跟着变', () => {
     const state = campaignState();
     unlock(state, 'priceTags');
     unlock(state, 'doubleBox');

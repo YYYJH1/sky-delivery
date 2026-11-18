@@ -3,7 +3,7 @@
 // 日结做的事：
 // 1 统计今天下单、今天有结果、还没完成的订单数，今天的进账
 // 2 口碑：每个开通的片区按最近两天的统计升星或掉星，星级变了就重算开张的店
-// 3 记录，包括每个片区的一行
+// 3 记录，包括每个片区的一行、当天各时刻的运力占用和购买改装之后的效果
 // 4 靠日结判断的开放项：「调度策略」一栏最晚在第二天的日结时开放，片区的显示，「短程优先」，「{片区}优先」，价签
 // 5 结局：三个片区都到了四星
 import { MAP_V1 } from '../../content/map_v1.ts';
@@ -11,6 +11,8 @@ import { STARS_V1 } from '../../content/stars_v1.ts';
 import { UNLOCKS_V1 } from '../../content/unlocks_v1.ts';
 import { DAY_STEPS, PROMISE_STEPS } from '../constants.ts';
 import type { DayDistrictRecord, DayRecord, Order, SimState } from '../types.ts';
+import { settleEffects } from './effects.ts';
+import { takeDayBusy } from './fleet.ts';
 import { refreshShops } from './map.ts';
 import { newShopAt } from './places.ts';
 import { MAX_ORDER_LIFE, decideStar, emptyCounts, pct, resultStep, tallyResults, windowOfDay } from './rating.ts';
@@ -100,6 +102,8 @@ export function settleDay(state: SimState, day: number): DayRecord {
     districts: lines,
     peaksJudged: peaksOfDay.filter((p) => p.cleared !== null).length,
     peaksCleared: peaksOfDay.filter((p) => p.cleared === true).length,
+    busy: takeDayBusy(state), // 读出当天各时刻的占用，并把当天的计数清零
+    effects: settleEffects(state), // 购买改装之后的几次日结里，写这项改装对应的指标现在的数值和不购买时的数值
   };
   campaign.days.push(record);
 

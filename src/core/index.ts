@@ -3,7 +3,7 @@ export * from './constants.ts';
 export { DEFAULT_CONFIG, LAYOUTS, MODES, RETURN_RULES, SCENARIOS, makeConfig } from './config.ts';
 export type { ConfigOverrides } from './config.ts';
 export { createState, prioritizeOrder, setRules } from './state.ts';
-export { STEP_PHASES, advance, step } from './step.ts';
+export { LIGHT_STEP_PHASES, STEP_PHASES, advance, step, stepLight } from './step.ts';
 export type { StepObserver, StepPhase } from './step.ts';
 export { hashState } from './hash.ts';
 export { addOrder } from './systems/orders.ts';
@@ -42,6 +42,8 @@ export { runDays, runMetrics } from './run.ts';
 export type { RunMetrics } from './run.ts';
 // ---- 经营模式 ----
 export { CONTENT_VERSION } from '../content/version.ts';
+// 应用层只能经这个入口读到内容表里的数：推演的订单序列数、推演次数的上限
+export { FORECAST_V1 } from '../content/forecast_v1.ts';
 export { buildCampaignWorld, refreshShops } from './campaign/map.ts';
 export { campaignArrivals, districtLambda } from './campaign/arrivals.ts';
 export { currentOpeningMultiplier, districtOpenDay, openingMultiplier, openingPhase } from './campaign/opening.ts';
@@ -59,12 +61,14 @@ export { decideStar, districtNote, keepRule, meetsRule, pct, pickNoteKind, resul
 export type { DistrictNote, NoteKind, ResultCounts, StarDecision } from './campaign/rating.ts';
 export { UNLOCK_KEYS, isUnlocked, lockedUnlocks, refreshUnlocks, ruleLock, ruleOffered, ruleOpen, showKeyOf, unlock } from './campaign/unlocks.ts';
 export { autoPoolAfterDoubleBox, ruleSetAt, ruleSetInForce, splitRuleSets, switchRuleSet } from './campaign/rulesets.ts';
-export { anyStationAtCap, lastPeakTicket, peakRecord, pickExtra, pickMain, pickSentences, recordPeakSummary, sharesOf100 } from './campaign/summary.ts';
+export { lastPeakTicket, peakRecord, pickExtra, pickMain, pickSentences, recordPeakSummary, sharesOf100 } from './campaign/summary.ts';
 export { districtGoal, goalOf, goalRule, judgeable, liveRows, peakGoals, reachesLine, recordPeakGoals } from './campaign/goals.ts';
 export type { LiveRow, LiveView } from './campaign/goals.ts';
-export { attachBaseline, finishShadow, forwardToShadow, isForwarded, openShadow } from './campaign/shadow.ts';
+export { attachBaseline, finishShadow, forwardToShadow, isForwarded, openShadow, replayOnCopy } from './campaign/shadow.ts';
 export type { BaselineDraft, Shadow } from './campaign/shadow.ts';
+export { FLEET_CLASSES, FleetClass, busySegmentOf, emptyTally, fleetClassOf, isBackFlight, recordFleet, recordSortie, resetPeakTally, takeDayBusy } from './campaign/fleet.ts';
 export { gainTotal, incomeStanding, peakGain, peakStanding } from './campaign/records.ts';
+export { effectValue, recordTwin, settleEffects, watchPurchase } from './campaign/effects.ts';
 export type { PeakStanding, Standing } from './campaign/records.ts';
 export type { PeakTicket, SentenceInput, Sentences } from './campaign/summary.ts';
 export { TIP_IDS, hasTip, markTipRead, pushTip, tipsPhase, unreadTips } from './campaign/tips.ts';

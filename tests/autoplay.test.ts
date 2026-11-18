@@ -9,7 +9,7 @@ import { STARS_V1 } from '../src/content/stars_v1.ts';
 import { CAMPAIGN_RULES_V1 } from '../src/content/rules_v1.ts';
 import { DAY_STEPS, EVENING_WINDOW, NOON_WINDOW, OrderStatus, addOrder, quoteCommand } from '../src/core/index.ts';
 import type { PeakRecord } from '../src/core/index.ts';
-import { CLICK_DELAY, DECIDE_EVERY, MAIN_NODES, NODE_INFO, POLICIES, POLICY_IDS, chooseRoof, peakOrdersOf, playGame, ruleCommands, shoppingList, stepsToMinutes } from '../tools/autoplay-lib.ts';
+import { CLICK_DELAY, DECIDE_EVERY, MAIN_NODES, NODE_INFO, POLICIES, POLICY_IDS, chooseRoof, gateCommand, peakOrdersOf, playGame, ruleCommands, shoppingList, stepsToMinutes } from '../tools/autoplay-lib.ts';
 import type { NodeId, RunRecord } from '../tools/autoplay-lib.ts';
 import { applyPatch } from '../tools/autoplay-patch.ts';
 import { GOALS, WEAK_POLICIES, goalChecks, quantile, renderMarkdown, summarize } from '../tools/autoplay-summary.ts';
@@ -177,6 +177,83 @@ describe('玩法：购物清单', () => {
     const state = withMoney(quietState());
     expect(shoppingList(state, POLICIES.idle)).toEqual([]);
     expect(ruleCommands(state, POLICIES.idle)).toEqual([]);
+  });
+});
+
+describe('玩法：升起降口的站', () => {
+  /** 三座站，站 0 有 2 架飞机，站 1 有 3 架，站 2 有 1 架，起降口都是 1 级。 */
+  function threeStations(): ReturnType<typeof quietState> {
+    const state = withMoney(quietState());
+    campaignOf(state).districts[1]!.open = true;
+    must(state, { type: 'buildStation', roof: OFFICE_ROOFS[0] as number });
+    must(state, { type: 'buildStation', roof: OFFICE_ROOFS[1] as number });
+    must(state, { type: 'buyBay', station: 1 }); // 新站自带 2 个停机位，站 1 要放 3 架
+    for (let i = 0; i < 3; i++) must(state, { type: 'buyDrone', station: 1 });
+    must(state, { type: 'buyDrone', station: 2 });
+    return state;
+  }
+
+  /** 一场小结的记录，只写选站要看的：附加句，和各站排队时间占比的一行。 */
+  function record(extra: unknown, queuePcts: readonly number[] | null): PeakRecord {
+    const stations = queuePcts === null ? undefined : queuePcts.map((queuePct, station) => ({ station, queuePct }));
+    return { day: 0, peak: 'noon', step: 0, main: { id: 'waitGate' }, extra, stations } as unknown as PeakRecord;
+  }
+
+  const upgrade = (station: number): { type: 'upgradeGate'; station: number } => ({ type: 'upgradeGate', station });
+
+  it('附加句是等待起飞或等待降落时，升它点名的站，不看各站的排队占比', () => {
+    const state = threeStations();
+    expect(gateCommand(state, record({ id: 'takeoffWait', station: 2, percent: 30 }, [60, 50, 1]))).toEqual(upgrade(2));
+    expect(gateCommand(state, record({ id: 'landQueue', station: 1, count: 1.4 }, [60, 0, 50]))).toEqual(upgrade(1));
+  });
+
+  it('点名的站已经到 3 级时，改取排队占比最大的、还没到 3 级的站', () => {
+    const state = threeStations();
+    must(state, { type: 'upgradeGate', station: 2 });
+    must(state, { type: 'upgradeGate', station: 2 });
+    expect(gateCommand(state, record({ id: 'takeoffWait', station: 2, percent: 30 }, [10, 20, 90]))).toEqual(upgrade(1));
+  });
+
+  it('没有点名起降的附加句（别的附加句，或者没有附加句）时，升排队占比最大的站，并列取编号小的', () => {
+    const state = threeStations();
+    expect(gateCommand(state, record(null, [12, 30, 25]))).toEqual(upgrade(1));
+    expect(gateCommand(state, record({ id: 'emptyFlight', percent: 40 }, [12, 30, 25]))).toEqual(upgrade(1));
+    expect(gateCommand(state, record({ id: 'bayIdle', station: 2, percent: 60 }, [12, 25, 25]))).toEqual(upgrade(1));
+    // 全是 0 也是并列，取编号最小的站
+    expect(gateCommand(state, record(null, [0, 0, 0]))).toEqual(upgrade(0));
+  });
+
+  it('排队占比最大的站已经到 3 级时，取剩下的站里最大的', () => {
+    const state = threeStations();
+    must(state, { type: 'upgradeGate', station: 1 });
+    must(state, { type: 'upgradeGate', station: 1 });
+    expect(gateCommand(state, record(null, [12, 90, 25]))).toEqual(upgrade(2));
+    // 三座站都到 3 级：没有可升的
+    for (const station of [0, 2]) {
+      must(state, { type: 'upgradeGate', station });
+      must(state, { type: 'upgradeGate', station });
+    }
+    expect(gateCommand(state, record(null, [12, 90, 25]))).toBeNull();
+  });
+
+  it('上一场没有各站的记录时，沿用飞机最多的站：没有小结，或者记录里没有各站的行，或者行里的站都不能升', () => {
+    const state = threeStations();
+    expect(gateCommand(state, undefined)).toEqual(upgrade(1));
+    expect(gateCommand(state, record(null, null))).toEqual(upgrade(1));
+    expect(gateCommand(state, record(null, []))).toEqual(upgrade(1));
+    // 记录里只有站 1，它已经到 3 级，站 0 和站 2 不在记录里：回到飞机最多的站里没到 3 级的，站 0 和站 2 里站 0 的飞机多
+    must(state, { type: 'upgradeGate', station: 1 });
+    must(state, { type: 'upgradeGate', station: 1 });
+    expect(gateCommand(state, { ...record(null, null), stations: [{ station: 1, queuePct: 50 }] } as unknown as PeakRecord)).toEqual(upgrade(0));
+  });
+
+  it('不改购物清单的顺序：屋顶放满之后，等起降口先升起降口，升的站按新规则取', () => {
+    const state = withMoney(quietState());
+    (state.stations[0] as { bays: number }).bays = 9;
+    for (let i = 0; i < 7; i++) must(state, { type: 'buyDrone', station: 0 });
+    const spec = { ...POLICIES.balanced, buys: { ...POLICIES.balanced.buys, district: false } };
+    campaignOf(state).peaks.push(record({ id: 'takeoffWait', station: 0, percent: 30 }, [30])); // 主句是等起降口
+    expect(shoppingList(state, spec)).toEqual([upgrade(0), { type: 'buildStation', roof: chooseRoof(state, 0) }, { type: 'buyDoubleBox' }]);
   });
 });
 
@@ -537,6 +614,9 @@ describe('节点：从日结记录、解锁和购买记录里提取', () => {
     expect(MAIN_NODES.length).toBe(12);
     expect(NODE_INFO.filter((i) => i.target !== null).map((i) => i.id)).toEqual(['firstPurchase', 'oldStreet2', 'oldStreet3', 'officeShown', 'secondStation', 'firstChoice', 'office3', 'ending']);
     expect(NODE_INFO.find((i) => i.id === 'ending')?.target).toEqual([120, 180]);
+    // 双层货箱随价签开放，价签出现的那一刻（第一天结束）就要比较货箱、停机位和飞机，所以这个节点的目标是约 6 分钟，原来是 15 到 25 分钟
+    expect(NODE_INFO.find((i) => i.id === 'firstChoice')?.target).toEqual([5.5, 6.5]);
+    expect(NODE_INFO.find((i) => i.id === 'firstChoice')?.targetText).toBe('约 6');
     expect(NODE_INFO.slice(0, MAIN_NODES.length).map((i) => i.id)).toEqual([...MAIN_NODES]);
     const { record } = playGame('idle', 42, { days: 1 });
     expect(Object.keys(record.nodes).sort()).toEqual(NODE_INFO.map((i) => i.id).sort());

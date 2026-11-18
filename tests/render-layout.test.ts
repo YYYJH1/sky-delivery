@@ -1,7 +1,7 @@
 // 站点屋顶里的排布：起降圈在哪，停机位怎么摆。画屋顶的代码和摆精灵的代码共用这里，所以屋顶上画的圈和飞机停的位置对得上。
 import { describe, expect, it } from 'vitest';
 import { STATION_SIZES } from '../src/render/city.ts';
-import { bayPositions, landingCircle, slotSize } from '../src/render/layout.ts';
+import { CLERK_ABOVE, CLERK_HEIGHT, CLERK_MARGIN, CLERK_WIDTH, NUMBER_HALF, bayPositions, clerkScale, clerkSpot, landingCircle, slotSize } from '../src/render/layout.ts';
 import { slotWorldPositions } from '../src/render/scene.ts';
 
 /** 地图里三种屋顶的大小，各配一个停机位数：开局的 2 个，中屋顶放满的 9 个，大屋顶放满的 12 个。 */
@@ -173,5 +173,83 @@ describe('停机位按屋顶的上限排好位置', () => {
     const final = bayPositions(w, h, 9, 9);
     expect(after[3]!.x).toBeCloseTo(1000 + final[3]!.x, 9);
     expect(after[3]!.y).toBeCloseTo(500 + final[3]!.y, 9);
+  });
+});
+
+describe('数据员的人物站在屋顶的哪里', () => {
+  /** 三种屋顶。 */
+  const ROOFS: [string, readonly [number, number]][] = [
+    ['小屋顶', STATION_SIZES.small],
+    ['中屋顶', STATION_SIZES.medium],
+    ['大屋顶', STATION_SIZES.large],
+  ];
+
+  it('原大和停机位差不多：16 像素高，最大的停机位是 17，比高窄一些', () => {
+    expect(CLERK_HEIGHT).toBe(16);
+    expect(CLERK_WIDTH).toBe(11);
+    expect(slotSize(112, 1)).toBeGreaterThanOrEqual(CLERK_HEIGHT);
+  });
+
+  it('放大倍数：跟着记号倍数走，至少是 1，不放大时就是 1；屋顶越大上限越高', () => {
+    for (const [name, [w, h]] of ROOFS) {
+      expect(clerkScale(w, h, 1), name).toBe(1);
+      expect(clerkScale(w, h, 2), name).toBeGreaterThanOrEqual(1);
+      expect(clerkScale(w, h, 2), name).toBeLessThanOrEqual(2);
+      expect(clerkScale(w, h, 1.5), name).toBeLessThanOrEqual(clerkScale(w, h, 2));
+    }
+    const [small, medium, large] = ROOFS.map(([, [w, h]]) => clerkScale(w, h, 99));
+    expect(small).toBeLessThan(medium!);
+    expect(medium).toBeLessThan(large!);
+    // 开局的站在中屋顶上，镜头缩到最小时记号倍数是 2，人物能放到 2 倍
+    expect(clerkScale(...STATION_SIZES.medium, 2)).toBe(2);
+  });
+
+  it('左边和下沿都离屋顶边缘 CLERK_MARGIN，放大时向右和向上长，左下角不动', () => {
+    for (const [name, [, h]] of ROOFS) {
+      for (const k of [1, 1.5, 2]) {
+        const spot = clerkSpot(h, k);
+        expect(spot.x - (CLERK_WIDTH * k) / 2, `${name} ${k} 左边`).toBeCloseTo(CLERK_MARGIN, 9);
+        expect(spot.y + (CLERK_HEIGHT * k) / 2, `${name} ${k} 下沿`).toBeCloseTo(h - CLERK_MARGIN, 9);
+      }
+    }
+  });
+
+  it('整个人在屋顶里侧的虚线框之内，放到上限时也是', () => {
+    for (const [name, [w, h]] of ROOFS) {
+      for (const unit of [1, 1.5, 2, 99]) {
+        const k = clerkScale(w, h, unit);
+        const spot = clerkSpot(h, k);
+        expect(spot.x - (CLERK_WIDTH * k) / 2, `${name} ${unit} 左边`).toBeGreaterThanOrEqual(6);
+        expect(spot.x + (CLERK_WIDTH * k) / 2, `${name} ${unit} 右边`).toBeLessThanOrEqual(w - 6);
+        expect(spot.y - (CLERK_HEIGHT * k) / 2, `${name} ${unit} 上沿`).toBeGreaterThanOrEqual(6);
+        expect(spot.y + (CLERK_HEIGHT * k) / 2, `${name} ${unit} 下沿`).toBeLessThanOrEqual(h - 6);
+      }
+    }
+  });
+
+  it('放到上限时不压住起降圈里的站号：右边在站号的左边，上沿不超过圈心下面 CLERK_ABOVE 个半径', () => {
+    for (const [name, [w, h]] of ROOFS) {
+      const circle = landingCircle(w, h);
+      const k = clerkScale(w, h, 99);
+      const spot = clerkSpot(h, k);
+      // 站号写在圈心，宽度约 2 乘 NUMBER_HALF 个半径
+      expect(spot.x + (CLERK_WIDTH * k) / 2, name).toBeLessThanOrEqual(circle.cx - circle.r * NUMBER_HALF - 1 + 1e-9);
+      expect(spot.y - (CLERK_HEIGHT * k) / 2, name).toBeGreaterThanOrEqual(circle.cy + circle.r * CLERK_ABOVE - 1e-9);
+    }
+  });
+
+  it('原大时整个人在圈心以下：人物在圈的左下方，只和圈的圆弧挨着', () => {
+    for (const [name, [w, h]] of ROOFS) {
+      const circle = landingCircle(w, h);
+      const spot = clerkSpot(h, 1);
+      expect(spot.y - CLERK_HEIGHT / 2, name).toBeGreaterThanOrEqual(circle.cy);
+      expect(spot.x + CLERK_WIDTH / 2, name).toBeLessThanOrEqual(circle.cx);
+    }
+  });
+
+  it('放大的人物更靠上、更靠右，大小跟着倍数走', () => {
+    const [, h] = STATION_SIZES.medium;
+    expect(clerkSpot(h, 1.8).y).toBeLessThan(clerkSpot(h, 1).y);
+    expect(clerkSpot(h, 1.8).x).toBeGreaterThan(clerkSpot(h, 1).x);
   });
 });

@@ -19,8 +19,16 @@ export const SAVE_FORMAT = 'sky-delivery-save';
  * 状态里加了经营模式的 campaign，以及它的 away 字段，字段表据此扩充。迁移见 migrate.ts。
  * 版本 3：经营模式的高峰小结和日结多了目标线、达标标记、小结对照和每场的达标场数，campaign 多了最近一场高峰的目标 goals。
  * 这些字段都可以是 null 或 0，旧存档里没有的由迁移补上。
+ * 版本 4：campaign 多了 nearestOwned（买下了就近降落，买下之后可以开关）和 tally（机队时间和排队的计数）。
+ * 高峰小结多了 fleet（机队时间构成）、fleetBack（回站飞行占比）和 stations（各站的一行），日结多了 busy（各时刻的运力占用）。
+ * 这些字段在旧存档的记录里可以是 null 或空数组，由迁移补上。
+ * 双层货箱改为随价签开放，价签已开放而它还没开放的存档由迁移补开。
+ * 同一个格式里还加了数据员和效果记录（它们和版本 4 的其余改动在 v0.3.0 一起首次发布，所以没有另升版本）：campaign 多了 forecast（推演次数）和
+ * effectWatches（购买的效果跟踪，含副本记下的数 twins），日结多了 effects（效果行，含不购买时的数 twin），
+ * 各项开放多了 dataClerk（数据员，随价签开放，价签已开放的存档由迁移补开）。
+ * 效果记录改为与不购买的副本对照之前写出的格式 4 存档，跟踪里没有 twins，效果行里没有 twin，读档会被字段表拒绝。
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /**
  * 内容版本号，取自内容表的 src/content/version.ts。内容表（地图、价格、星级线等）改到会影响已有存档时，

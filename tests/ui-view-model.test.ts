@@ -5,8 +5,9 @@ import { ECONOMY_V1 } from '../src/content/economy_v1.ts';
 import { MAP_V1 } from '../src/content/map_v1.ts';
 import { STR, fmt } from '../src/content/strings.zh.ts';
 import { DAY_STEPS, DroneState, advance, applyCommand, bayPrice, createState, dronePrice, gatePrice, hashState, pushTip, stationPrice } from '../src/core/index.ts';
+import type { PeakRecord } from '../src/core/index.ts';
 import { fastForward } from '../src/ui/debug-params.ts';
-import { DEFAULT_VIEW, computeUiData, refundOption, wholeMoney } from '../src/ui/view-model.ts';
+import { DEFAULT_VIEW, computeUiData, refundOption, upgradeRows, wholeMoney } from '../src/ui/view-model.ts';
 import { campaignOf, campaignState, must, quietState, runningState, unlockAll, withMoney } from './campaign-helpers.ts';
 
 function data(state: ReturnType<typeof campaignState>): NonNullable<ReturnType<typeof computeUiData>> {
@@ -122,6 +123,59 @@ describe('站点小卡', () => {
     expect(card.tags.addDrone).toMatchObject({ price: dronePrice(3), ok: false, reason: 'fleetFull' });
     expect(card.gate).toMatchObject({ key: 'gate2', price: gatePrice(2), note: 'desc' });
   });
+
+  it('等待起飞的架数：在起降口队列里的，和停在停机位上已经接了单（路线不空）的，不含停着不动、等降落、已退回和别的站的', () => {
+    const state = campaignState();
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(0);
+    const [a, b] = state.drones as [(typeof state.drones)[number], (typeof state.drones)[number]];
+    a.state = DroneState.TakeoffQueue;
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(1);
+    b.state = DroneState.Dock;
+    b.route = [{ kind: 0, order: 0 }];
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(2);
+    b.route = [];
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(1);
+    a.state = DroneState.LandQueue;
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(0);
+    expect(data(state).stations[0]?.holding).toBe(1);
+    a.state = DroneState.TakeoffQueue;
+    a.removed = true;
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(0);
+    a.removed = false;
+    a.station = 5; // 别的站
+    expect(data(state).stations[0]?.takeoffWaiting).toBe(0);
+  });
+
+  it('小卡里带最近一场高峰的一行和本站可购买的三项', () => {
+    const state = withMoney(unlockAll(campaignState()));
+    const card = data(state).stations[0]!;
+    expect(card.recent).toEqual({ kind: 'none', text: '暂无高峰记录' });
+    expect(card.buy.map((l) => l.key)).toEqual(['bay', 'drone', 'gate']);
+    expect(card.buy.map((l) => l.text)).toEqual([`新增停机位 ¥${bayPrice(3)}`, `购买无人机 ¥${dronePrice(3)}`, `起降口 2 级 ¥${gatePrice(2)}`]);
+    expect(card.gates.map((g) => g.key)).toEqual(['gate2', 'gate3']);
+  });
+
+  it('真实运行：第一场午高峰的小结生成之后，一号站的小卡里有这一场的一行，新建的站没有', () => {
+    const state = withMoney(runningState(42), 10_000);
+    advance(state, 1801);
+    const peaks = campaignOf(state).peaks;
+    expect(peaks).toHaveLength(1);
+    expect(peaks[0]?.stations.map((r) => r.station)).toEqual([0]);
+    const first = data(state).stations[0]!;
+    expect(first.recent).toMatchObject({ kind: 'row', title: '最近一场午高峰' });
+    unlockAll(state);
+    const second = must(state, { type: 'buildStation', roof: 1 });
+    expect(data(state).stations.find((s) => s.id === second)?.recent).toEqual({ kind: 'none', text: '暂无高峰记录' });
+  });
+
+  it('迁移来的旧记录没有各站的行：小卡里只写暂无高峰记录', () => {
+    const state = runningState(42);
+    advance(state, 1801);
+    const record: PeakRecord = campaignOf(state).peaks[0]!;
+    record.stations = [];
+    record.fleet = null;
+    expect(data(state).stations[0]?.recent).toEqual({ kind: 'none', text: '暂无高峰记录' });
+  });
 });
 
 describe('退回按钮', () => {
@@ -193,11 +247,114 @@ describe('新建站点和改装', () => {
     expect(data(state).build.canEnter).toBe(false);
   });
 
-  it('改装：双层货箱、就近降落（只有一座站时没开放）、没选站时起降口列 2 级，价格取自价格表', () => {
+  it('改装：双层货箱、就近降落（只有一座站时没开放）、没选站时起降口列 2 级和 3 级，价格取自价格表', () => {
     const d = data(unlockAll(campaignState()));
     expect(d.doubleBox).toMatchObject({ key: 'doubleBox', price: ECONOMY_V1.doubleBoxPrice, note: 'desc' });
     expect(d.nearbyLanding).toMatchObject({ key: 'nearbyLanding', price: ECONOMY_V1.nearestLandingPrice, note: 'locked' });
-    expect(d.gateWithoutStation).toMatchObject({ key: 'gate2', price: gatePrice(2), note: 'needStation' });
+    expect(d.gatesWithoutStation).toMatchObject([
+      { key: 'gate2', price: gatePrice(2), note: 'needStation' },
+      { key: 'gate3', price: gatePrice(3), note: 'needStation' },
+    ]);
+  });
+});
+
+describe('改装单的四行', () => {
+  const keys = (rows: ReturnType<typeof upgradeRows>): string[] => rows.map((r) => r.key);
+
+  it('列出全部节点，按顺序：双层货箱，起降口 2 级，起降口 3 级，就近降落', () => {
+    const d = data(unlockAll(campaignState()));
+    expect(keys(upgradeRows(d, null))).toEqual(['doubleBox', 'gate2', 'gate3', 'nearbyLanding']);
+    expect(keys(upgradeRows(d, 0))).toEqual(['doubleBox', 'gate2', 'gate3', 'nearbyLanding']);
+  });
+
+  it('价签出现之后双层货箱总是列出：不看停机位满没满，也不看小结的主句，没钱也列', () => {
+    const state = campaignState();
+    unlockAll(state);
+    withMoney(state, 0);
+    expect(data(state).tagsShown).toBe(true);
+    expect(upgradeRows(data(state), null)[0]).toMatchObject({ key: 'doubleBox', note: 'desc', dim: true });
+  });
+
+  it('没选站点：起降口两行都写请先选择站点。选中的站已经退回时同样', () => {
+    const state = withMoney(unlockAll(campaignState()));
+    const d = data(state);
+    expect(upgradeRows(d, null).slice(1, 3).map((r) => r.note)).toEqual(['needStation', 'needStation']);
+    expect(upgradeRows(d, 7).slice(1, 3).map((r) => r.note)).toEqual(['needStation', 'needStation']);
+  });
+
+  it('选中一座站：起降口两行看这座站的等级', () => {
+    const state = withMoney(unlockAll(campaignState()));
+    expect(upgradeRows(data(state), 0).slice(1, 3).map((r) => r.note)).toEqual(['desc', 'locked']);
+    must(state, { type: 'upgradeGate', station: 0 });
+    expect(upgradeRows(data(state), 0).slice(1, 3).map((r) => r.note)).toEqual(['owned', 'desc']);
+    must(state, { type: 'upgradeGate', station: 0 });
+    expect(upgradeRows(data(state), 0).slice(1, 3).map((r) => r.note)).toEqual(['owned', 'owned']);
+  });
+
+  it('就近降落一行的三种状态：没开放，能买，买下之后是开关', () => {
+    const state = withMoney(unlockAll(campaignState()));
+    expect(upgradeRows(data(state), null)[3]?.note).toBe('locked');
+    must(state, { type: 'buildStation', roof: 1 });
+    expect(upgradeRows(data(state), null)[3]?.note).toBe('desc');
+    must(state, { type: 'buyNearestLanding' });
+    expect(upgradeRows(data(state), null)[3]).toMatchObject({ note: 'toggle', on: true });
+    must(state, { type: 'setNearestLanding', on: false });
+    expect(upgradeRows(data(state), null)[3]).toMatchObject({ note: 'toggle', on: false });
+  });
+});
+
+describe('日程纸条上的运力占用带', () => {
+  /** 一条带占用百分数的日结记录，24 个数。 */
+  const busyDay = (busy: number[] | null): ReturnType<typeof campaignOf>['days'][number] => ({
+    day: 0,
+    step: DAY_STEPS,
+    ordered: 0,
+    resolved: 0,
+    onTime: 0,
+    late: 0,
+    cancelled: 0,
+    pending: 0,
+    income: 0,
+    districts: [],
+    peaksJudged: 0,
+    peaksCleared: 0,
+    busy,
+    effects: [],
+  });
+
+  it('还没有日结记录：没有这条带', () => {
+    expect(data(campaignState()).busy).toBeNull();
+  });
+
+  it('最近一次日结的记录里有 24 个数：24 格，每格的占用百分数就是记录里的数', () => {
+    const state = campaignState();
+    const values = Array.from({ length: 24 }, (_, i) => i * 4);
+    campaignOf(state).days.push(busyDay(values));
+    const busy = data(state).busy;
+    expect(busy).toHaveLength(24);
+    expect(busy?.map((c) => c.pct)).toEqual(values);
+  });
+
+  it('取最近一次日结：前一天的记录不再用', () => {
+    const state = campaignState();
+    campaignOf(state).days.push(busyDay(new Array<number>(24).fill(10)), busyDay(new Array<number>(24).fill(70)));
+    expect(data(state).busy?.every((c) => c.pct === 70)).toBe(true);
+  });
+
+  it('从旧存档迁移来的记录没有占用数：不显示这条带', () => {
+    const state = campaignState();
+    campaignOf(state).days.push(busyDay(null));
+    expect(data(state).busy).toBeNull();
+  });
+
+  it('真实运行：第一天结束时记下第一天的占用，第二天起纸条上有这条带，每格都是 0 到 100 的整数', () => {
+    const state = runningState(42);
+    expect(data(state).busy).toBeNull();
+    advance(state, DAY_STEPS + 1);
+    const busy = data(state).busy;
+    expect(busy).toHaveLength(24);
+    expect(busy?.every((c) => Number.isInteger(c.pct) && c.pct >= 0 && c.pct <= 100)).toBe(true);
+    expect(busy?.map((c) => c.pct)).toEqual(campaignOf(state).days[0]?.busy);
   });
 });
 

@@ -5,6 +5,8 @@
 import { signal } from '@preact/signals';
 import type { RuleId } from '../content/strings.zh.ts';
 import type { BoardCard } from './board.ts';
+import type { ForecastOption, ForecastSheetState } from './forecast.ts';
+import { CARD_HEIGHT } from './map-layout.ts';
 import type { PlacedRoofLabel } from './map-layout.ts';
 import type { PeakKey } from './schedule.ts';
 import type { UpgradeItem } from './tags.ts';
@@ -64,6 +66,11 @@ export interface DistrictAnchor {
 export type SummaryPhase = 'closed' | 'peek' | 'open';
 
 export const uiData = signal<UiData | null>(null);
+/**
+ * 站点小卡现在排出来的高度，按 1920×1080 的尺寸算，不含窗口缩放。小卡里的块有的有、有的没有，高度每次不同，
+ * 摆放时按它算才不会离站点太远，也不会超出窗口。小卡量过大小之后写进来，还没量过时是 CARD_HEIGHT。
+ */
+export const cardHeight = signal(CARD_HEIGHT);
 export const run = signal<{ readonly paused: boolean; readonly speed: Speed }>({ paused: false, speed: 1 });
 export const selected = signal<number | null>(null);
 export const anchor = signal<StationAnchor | null>(null);
@@ -96,6 +103,8 @@ export const dayEndOpen = signal(false);
 /** 结局的提示开着，点一下收起，游戏照常运行。 */
 export const endingOpen = signal(false);
 export const districtAnchors = signal<readonly DistrictAnchor[]>([]);
+/** 开着的推演单，没有时为 null。推演进行中它写「推演中」，所有「推演」按钮也跟着写「推演中」。 */
+export const forecastSheet = signal<ForecastSheetState | null>(null);
 /** 选屋顶时每块候选屋顶旁边的文字，位置在窗口里。 */
 export const roofLabels = signal<readonly PlacedRoofLabel[]>([]);
 
@@ -147,6 +156,10 @@ export interface Actions {
   clickSummaryBoard(): void;
   clickDayEndContinue(): void;
   clickEnding(): void;
+  /** 点「推演」：推演这个选项。host 是按钮所在的物件（改装单、站点小卡、调度台的 data-part），推演单贴在它旁边。推演进行中不响应，次数用完时提示。 */
+  clickForecast(option: ForecastOption, host: string | null): void;
+  /** 关掉推演单。推演还在算时取消它，不扣次数。 */
+  closeForecast(): void;
 }
 
 const none = (): void => undefined;
@@ -179,4 +192,6 @@ export const actions: Actions = {
   clickSummaryBoard: none,
   clickDayEndContinue: none,
   clickEnding: none,
+  clickForecast: none,
+  closeForecast: none,
 };

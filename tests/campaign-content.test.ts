@@ -325,8 +325,10 @@ describe('各片区的订单规律', () => {
   const EVENING: [number, number] = [EVENING_WINDOW.start, EVENING_WINDOW.end];
   const at = (district: number, second: number): number => interpolateCurve((DISTRICT_RATES_V1[district] as { curveSeconds: number[] }).curveSeconds, (DISTRICT_RATES_V1[district] as { curveRate: number[] }).curveRate, second);
 
-  it('基础来单率：老街 10，写字楼区 40，大学城 36，星级倍数是 1.25 的 0 到 4 次方', () => {
-    expect(DISTRICT_RATES_V1.map((d) => d.baseRate)).toEqual([10, 40, 36]);
+  it('基础来单率：老街 10，写字楼区 40，大学城 72，星级倍数是 1.25 的 0 到 4 次方', () => {
+    // 大学城原来是 36。双层货箱随价签开放以后，均衡玩法的结局中位数从 126 分钟提前到 108 分钟，把大学城提高到 72 之后回到 126 分钟，
+    // 大学城开通之前没有它的订单，所以前半程的节点不变。取值的依据在 districts_v1.ts 大学城一项的注释里
+    expect(DISTRICT_RATES_V1.map((d) => d.baseRate)).toEqual([10, 40, 72]);
     expect(STAR_MULTIPLIER_V1).toEqual([1, 1.25, 1.5625, 1.953125, 2.44140625]);
     // 每升一星乘 1.25，掉一星除以 1.25，与日结文案「多两成半」「少两成」一致
     STAR_MULTIPLIER_V1.forEach((m, i) => {

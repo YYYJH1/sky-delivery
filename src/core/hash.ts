@@ -247,6 +247,12 @@ function hashCampaign(h: Hasher, c: CampaignState): void {
   h.value(c.goals);
   // 离开结算的记录
   h.value(c.away);
+  // 存档格式 4 加的字段：买下了就近降落，机队时间和排队的计数（含回站飞行的计数 back，小结里的 fleetBack 在 peaks 里），推演次数，
+  // 购买的效果跟踪（含副本记下的数 twins，日结里的效果行在 days 里，行里有不购买时的数 twin）。tally 按 value 整体写入，计数里以后加字段，哈希自动覆盖
+  h.bool(c.nearestOwned);
+  h.value(c.tally);
+  h.value(c.forecast);
+  h.value(c.effectWatches);
 }
 
 /** 整个模拟状态的哈希，16 位十六进制。静态地图只用创建时算好的摘要。 */

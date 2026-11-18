@@ -82,6 +82,9 @@ describe('界面层的源文件都在', () => {
       'components.tsx',
       'board-panel.tsx',
       'ticket-panels.tsx',
+      'forecast-panel.tsx',
+      'forecast.ts',
+      'forecast-flow.ts',
       'sheets.tsx',
       'paper.ts',
       'paper-use.ts',
@@ -94,6 +97,7 @@ describe('界面层的源文件都在', () => {
       'names.ts',
       'roofs.ts',
       'tags.ts',
+      'card.ts',
       'reasons.ts',
       'schedule.ts',
       'board.ts',
@@ -208,8 +212,8 @@ describe('部件不碰游戏状态', () => {
   /** 界面的部件：components.tsx 和另外几个 .tsx（入口 main.tsx 除外）。 */
   const PANELS = UI_FILES.filter((f) => f.endsWith('.tsx') && base(f) !== 'main.tsx');
 
-  it('部件（components.tsx、board-panel.tsx、ticket-panels.tsx、note-panels.tsx、sheets.tsx）不引用核心，也不引用存档和运行循环：它们只读 state.ts 里的界面数据', () => {
-    expect(PANELS.map(base).sort()).toEqual(['board-panel.tsx', 'components.tsx', 'note-panels.tsx', 'sheets.tsx', 'ticket-panels.tsx']);
+  it('部件（components.tsx、board-panel.tsx、ticket-panels.tsx、note-panels.tsx、forecast-panel.tsx、sheets.tsx）不引用核心，也不引用存档和运行循环：它们只读 state.ts 里的界面数据', () => {
+    expect(PANELS.map(base).sort()).toEqual(['board-panel.tsx', 'components.tsx', 'forecast-panel.tsx', 'note-panels.tsx', 'sheets.tsx', 'ticket-panels.tsx']);
     const bad = PANELS.flatMap((file) => importsOf(file).filter((i) => /\/(core|save|app)\//.test(i.specifier) || /\/(core|save|app)\/index/.test(i.specifier)).map((i) => `${base(file)}: ${i.specifier}`));
     expect(bad).toEqual([]);
   });
@@ -230,7 +234,7 @@ describe('部件不碰游戏状态', () => {
 
 describe('纯函数模块不碰 DOM、定时器和系统时钟', () => {
   /** 碰浏览器的文件：入口、画布绘制、部件（含纸和量大小的 hook）、运行（game.ts）。其余都是纯函数，测试在 node 里直接调用。 */
-  const IMPURE = ['main.tsx', 'components.tsx', 'board-panel.tsx', 'ticket-panels.tsx', 'note-panels.tsx', 'sheets.tsx', 'paper.ts', 'paper-use.ts', 'map-view.ts', 'game.ts'];
+  const IMPURE = ['main.tsx', 'components.tsx', 'board-panel.tsx', 'ticket-panels.tsx', 'note-panels.tsx', 'forecast-panel.tsx', 'sheets.tsx', 'paper.ts', 'paper-use.ts', 'map-view.ts', 'game.ts'];
 
   it('其余文件里没有 document、window、navigator、存储、定时器、动画帧、Date 和随机数', () => {
     const bad: string[] = [];
@@ -261,7 +265,7 @@ describe('纯函数模块不碰 DOM、定时器和系统时钟', () => {
   });
 
   it('不读系统时钟、不用随机数的地方：地图场景和界面数据只由状态和参数决定', () => {
-    for (const f of ['map-state.ts', 'view-model.ts', 'tags.ts', 'roofs.ts', 'schedule.ts', 'reasons.ts', 'names.ts', 'map-layout.ts', 'map-hit.ts', 'board.ts', 'note.ts', 'tickets.ts', 'tips.ts', 'notices.ts', 'money.ts']) {
+    for (const f of ['map-state.ts', 'view-model.ts', 'tags.ts', 'card.ts', 'roofs.ts', 'schedule.ts', 'reasons.ts', 'names.ts', 'map-layout.ts', 'map-hit.ts', 'board.ts', 'note.ts', 'tickets.ts', 'tips.ts', 'notices.ts', 'money.ts', 'forecast.ts', 'forecast-flow.ts']) {
       const code = bareCodeOf(join(UI, f));
       expect(code, f).not.toMatch(/\bDate\b|\bMath\.random\b|\bperformance\b/);
     }

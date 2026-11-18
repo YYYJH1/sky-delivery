@@ -51,6 +51,9 @@ function peakStub(day: number, peak: PeakName, districts: PeakRecord['districts'
     extra: null,
     cleared: null,
     baseline: null,
+    fleet: null,
+    fleetBack: null,
+    stations: [],
   };
 }
 
@@ -68,6 +71,8 @@ function dayStub(day: number, fromStar: number): DayRecord {
     districts: [{ district: 0, kind: 'starKept', fromStar, star: fromStar, n: 0, onTime: 0, cancelled: 0, onTimePct: null, cancelPct: null, needOnTimePct: null, needCancelPct: null, newShops: [] }],
     peaksJudged: 0,
     peaksCleared: 0,
+    busy: null,
+    effects: [],
   };
 }
 

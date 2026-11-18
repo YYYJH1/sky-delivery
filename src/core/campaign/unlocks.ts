@@ -1,6 +1,6 @@
 // 解锁：栏、卡、价签和片区什么时候开放。条件在内容表 unlocks_v1.ts 里。
 // 每一项在 campaign.unlocks 里记下开放的那一步，-1 表示还没开放。已经开放的不会再锁上，掉星之后也不锁。
-// 靠状态本身判断的几项（站数、载量、片区开通、价签）由 refreshUnlocks 在每步开始时和每个命令之后检查。
+// 靠状态本身判断的几项（站数、载量、片区开通、价签、双层货箱、数据员）由 refreshUnlocks 在每步开始时和每个命令之后检查。
 // 靠统计判断的几项在各自的时刻检查：日结（settle.ts）和高峰小结（summary.ts）。
 import { ECONOMY_V1 } from '../../content/economy_v1.ts';
 import { CAMPAIGN_RULES_V1 } from '../../content/rules_v1.ts';
@@ -15,6 +15,7 @@ export const UNLOCK_KEYS: readonly UnlockKey[] = [
   'selectColumn',
   'priceTags',
   'doubleBox',
+  'dataClerk',
   'poolColumn',
   'zoneColumn',
   'nearestLanding',
@@ -29,6 +30,7 @@ export const UNLOCK_KEYS: readonly UnlockKey[] = [
 const UNLOCK_TIPS: Readonly<Partial<Record<UnlockKey, TipId>>> = {
   selectColumn: 'boardReady',
   priceTags: 'canAddBay',
+  dataClerk: 'dataClerk',
   showOffice: 'openOffice',
 };
 
@@ -38,6 +40,7 @@ export function lockedUnlocks(): Unlocks {
     selectColumn: -1,
     priceTags: -1,
     doubleBox: -1,
+    dataClerk: -1,
     poolColumn: -1,
     zoneColumn: -1,
     nearestLanding: -1,
@@ -76,6 +79,8 @@ export function unlock(state: SimState, key: UnlockKey): boolean {
  * - 开通写字楼区：午晚两套策略，同时把现在的策略分成两套
  * - 开通内容表 UNLOCKS_V1.prioOpensWith 指定的片区（写字楼区）：「{片区}优先」。内容表里这一项是 null 时不在这里开放，由日结判断
  * - 第一次日结之后余额达到内容表 UNLOCKS_V1.priceTagsBalance：价签
+ * - 价签开放：双层货箱和数据员同时开放。价签已经开放而它们还没开放的旧存档，读档之后的下一次检查也会补开，开放的步取检查的那一步
+ *   数据员到岗时放出「数据员已到岗」的便签，推演不收费，所以不看余额
  */
 export function refreshUnlocks(state: SimState): void {
   const campaign = state.campaign;
@@ -90,6 +95,12 @@ export function refreshUnlocks(state: SimState): void {
   }
   if (UNLOCKS_V1.prioOpensWith !== null && campaign.districts[UNLOCKS_V1.prioOpensWith]?.open === true) unlock(state, 'prioDistrict');
   if (campaign.days.length >= 1 && campaign.money >= UNLOCKS_V1.priceTagsBalance) unlock(state, 'priceTags');
+  // 双层货箱随价签开放：价签出现时就能比较「加停机位和无人机」与「双层货箱」两笔购买。
+  // 数据员也随价签到岗：玩家第一次要比较的购买在价签出现之后，推演不收费，资金不足的购买也可以推演
+  if (campaign.unlocks.priceTags >= 0) {
+    unlock(state, 'doubleBox');
+    unlock(state, 'dataClerk');
+  }
 }
 
 /**

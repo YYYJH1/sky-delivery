@@ -216,6 +216,92 @@ describe('说明的附加句：同时满足多条取靠前的一条，同一条�
   it('各条件取自内容表：1 架、一半、三成、20 个点', () => {
     expect([NOTES_V1.landQueueMin, NOTES_V1.bayIdleShare, NOTES_V1.notNearestShare, NOTES_V1.districtLowGap]).toEqual([1, 50, 30, 20]);
   });
+
+  it('机队时间的三个数取自内容表：等待起飞 15%，空载飞行 35%，起降拥堵便签 10%', () => {
+    expect([NOTES_V1.takeoffWaitPct, NOTES_V1.emptyFlightPct, NOTES_V1.gateBusyPct]).toEqual([15, 35, 10]);
+  });
+
+  // ---- 机队时间带来的两条附加句 ----
+
+  /** 一座站，等待起飞的时间占 pct%，其余都不触发。 */
+  const waiting = (pct: number, id = 0): SentenceInput['stations'][number] => ({ id, landWaitAvg: 0, bayEmptyShare: 0.1, takeoffWaitPct: pct });
+
+  it('1 某座站至少有 1 架无人机等待起飞的时间不少于 15%：恰好 15 算，14 不算，参数是站的编号和百分数', () => {
+    const at = (pct: number): ExtraSentence | null => pickExtra(input({ stations: [waiting(pct)] }), GATE);
+    expect(at(15)).toEqual({ id: 'takeoffWait', station: 0, percent: 15 });
+    expect(at(14)).toBeNull();
+    expect(at(0)).toBeNull();
+    expect(at(100)).toEqual({ id: 'takeoffWait', station: 0, percent: 100 });
+    expect(pickExtra(input({ stations: [{ id: 3, landWaitAvg: 0, bayEmptyShare: 0.1, takeoffWaitPct: 22 }] }), GATE)).toEqual({ id: 'takeoffWait', station: 3, percent: 22 });
+  });
+
+  it('1 没有计数的输入（takeoffWaitPct 缺省）按 0 处理：不写', () => {
+    expect(pickExtra(input({ stations: [{ id: 0, landWaitAvg: 0, bayEmptyShare: 0.1 }] }), GATE)).toBeNull();
+  });
+
+  it('1 多座站满足时取占比最大的一座，相同取编号小的，与输入的先后无关；不满足的站不参与', () => {
+    const stations = [waiting(10, 0), waiting(20, 1), waiting(30, 2), waiting(30, 3)];
+    expect(pickExtra(input({ stations }), GATE)).toEqual({ id: 'takeoffWait', station: 2, percent: 30 });
+    expect(pickExtra(input({ stations: [...stations].reverse() }), GATE)).toEqual({ id: 'takeoffWait', station: 2, percent: 30 });
+    expect(pickExtra(input({ stations: stations.slice(0, 2) }), GATE)).toEqual({ id: 'takeoffWait', station: 1, percent: 20 });
+    expect(pickExtra(input({ stations: stations.slice(0, 1) }), GATE)).toBeNull();
+  });
+
+  it('1 排在最前：同时满足等降落、停机位空着、空载飞行多、不是最近的站送的、片区准时率低，仍写等待起飞，与主句无关', () => {
+    const busy = input({
+      stations: [{ id: 0, landWaitAvg: 1.5, bayEmptyShare: 0.9, takeoffWaitPct: 20 }],
+      emptyFlightPct: 40,
+      nonNearestRate: 0.9,
+      nOnTime: 6,
+      districts: [{ district: 1, n: 10, onTime: 1 }],
+    });
+    for (const main of [WAIT, ROAD, GATE, { id: 'waitPrep' } as MainSentence, { id: 'onTimeHigh', onTime: 95 } as MainSentence]) {
+      expect(pickExtra(busy, main)).toEqual({ id: 'takeoffWait', station: 0, percent: 20 });
+    }
+  });
+
+  it('4 全部无人机空载飞行的时间不少于 35%：恰好 35 算，34 不算，没有机队时间构成（null 或缺省）不写', () => {
+    const at = (pct: number | null | undefined): ExtraSentence | null => pickExtra(input(pct === undefined ? {} : { emptyFlightPct: pct }), GATE);
+    expect(at(35)).toEqual({ id: 'emptyFlight', percent: 35 });
+    expect(at(34)).toBeNull();
+    expect(at(100)).toEqual({ id: 'emptyFlight', percent: 100 });
+    expect(at(null)).toBeNull();
+    expect(at(undefined)).toBeNull();
+  });
+
+  it('4 与主句无关：主句是等飞机、路上、等起降、等出餐、准时率高，都可以写空载飞行', () => {
+    const empty = input({ emptyFlightPct: 40 });
+    for (const main of [WAIT, ROAD, GATE, { id: 'waitPrep' } as MainSentence, { id: 'onTimeHigh', onTime: 95 } as MainSentence, { id: 'noDelivered' } as MainSentence]) {
+      expect(pickExtra(empty, main)).toEqual({ id: 'emptyFlight', percent: 40 });
+    }
+  });
+
+  it('条件表的顺序：等待起飞，等降落，停机位空着（主句是等飞机时），空载飞行，不是最近的站送的（主句是路上时），片区准时率低', () => {
+    const all = input({
+      stations: [{ id: 0, landWaitAvg: 1.5, bayEmptyShare: 0.9, takeoffWaitPct: 20 }],
+      emptyFlightPct: 40,
+      nonNearestRate: 0.5,
+      nOnTime: 6,
+      districts: [{ district: 1, n: 10, onTime: 1 }],
+    });
+    // 主句是等飞机：每去掉最前面的一条，下一条接上
+    expect(pickExtra(all, WAIT)?.id).toBe('takeoffWait');
+    const noTakeoff = { ...all, stations: [{ id: 0, landWaitAvg: 1.5, bayEmptyShare: 0.9 }] };
+    expect(pickExtra(noTakeoff, WAIT)?.id).toBe('landQueue');
+    const noLand = { ...noTakeoff, stations: [{ id: 0, landWaitAvg: 0, bayEmptyShare: 0.9 }] };
+    expect(pickExtra(noLand, WAIT)?.id).toBe('bayIdle');
+    const noIdle = { ...noLand, stations: [{ id: 0, landWaitAvg: 0, bayEmptyShare: 0.1 }] };
+    expect(pickExtra(noIdle, WAIT)).toEqual({ id: 'emptyFlight', percent: 40 });
+    expect(pickExtra({ ...noIdle, emptyFlightPct: null }, WAIT)?.id).toBe('districtLow');
+    // 主句是路上：空载飞行排在不是最近的站送的前面，没有空载飞行时写不是最近的站送的
+    expect(pickExtra(noIdle, ROAD)?.id).toBe('emptyFlight');
+    expect(pickExtra({ ...noIdle, emptyFlightPct: null }, ROAD)).toEqual({ id: 'notNearest', percent: 50 });
+    expect(pickExtra({ ...noIdle, emptyFlightPct: null, nonNearestRate: 0.1 }, ROAD)?.id).toBe('districtLow');
+  });
+
+  it('一次选出主句和附加句：空载飞行排在不是最近的站送的前面', () => {
+    expect(pickSentences(input({ segments: seg(1, 1, 1, 9), nonNearestRate: 0.4, emptyFlightPct: 38 }))).toEqual({ main: { id: 'road' }, extra: { id: 'emptyFlight', percent: 38 } });
+  });
 });
 
 describe('一张订单的四段时间各占的百分数', () => {
@@ -429,6 +515,36 @@ describe('小结的说明句：来自这一场的统计', () => {
     setLandWait(state, 0, 600, 1500, 0.4);
     const record = summarize(state, 0, 'noon', [...many(6, { kind: 'on' }), ...many(4, { kind: 'late' })]);
     expect(record.extra).toEqual({ id: 'landQueue', station: second, count: 1.4 });
+  });
+
+  it('某座站有无人机等待起飞的时间不少于 15%：附加句写等待起飞，写占比最大的站，百分数取自当场高峰的计数，排在等降落前面', () => {
+    const state = withMoney(quietState());
+    const second = must(state, { type: 'buildStation', roof: OLD_SMALL });
+    Object.assign(campaignOf(state).tally.peak, { steps: 900, takeoffWait: [100, 135] }); // 11%，15%
+    setLandWait(state, second, 600, 1500, 1.4); // 等降落也满足，但排在后面
+    const record = summarize(state, 0, 'noon', [...many(6, { kind: 'on' }), ...many(4, { kind: 'late' })]);
+    expect(record.extra).toEqual({ id: 'takeoffWait', station: second, percent: 15 });
+    expect(record.stations.map((r) => r.takeoffWaitPct)).toEqual([11, 15]);
+  });
+
+  it('全部无人机空载飞行的时间不少于 35%：附加句写空载飞行，百分数就是记录里机队时间构成的空载飞行', () => {
+    const state = quietState();
+    Object.assign(campaignOf(state).tally.peak, { steps: 900, fleet: [[300, 350, 200, 0, 50]] });
+    const record = summarize(state, 0, 'noon', [...many(6, { kind: 'on' }), ...many(4, { kind: 'late' })]);
+    expect(record.fleet).toEqual({ loaded: 33, empty: 39, work: 22, queue: 0, parked: 6 });
+    expect(record.extra).toEqual({ id: 'emptyFlight', percent: 39 });
+    // 空载飞行占 34% 时不写
+    const below = quietState();
+    Object.assign(campaignOf(below).tally.peak, { steps: 900, fleet: [[330, 306, 200, 0, 64]] });
+    const lower = summarize(below, 0, 'noon', [...many(6, { kind: 'on' }), ...many(4, { kind: 'late' })]);
+    expect(lower.fleet?.empty).toBe(34);
+    expect(lower.extra).toBeNull();
+  });
+
+  it('没有机队时间构成（这一场没有计数）：不写空载飞行', () => {
+    const record = summarize(quietState(), 0, 'noon', [...many(6, { kind: 'on' }), ...many(4, { kind: 'late' })]);
+    expect(record.fleet).toBeNull();
+    expect(record.extra).toBeNull();
   });
 
   it('已退回的站不算：这座站的等降落记录很高，退回之后附加句不再写它', () => {

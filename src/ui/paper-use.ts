@@ -15,9 +15,12 @@ export interface UsedPaper<T extends HTMLElement> {
   readonly ref: RefObject<T | null>;
   /** 放进物件 style 里的样式，含 --sheet。物件还没量过大小时为空对象。 */
   readonly style: Record<string, string>;
+  /** 物件排出来的大小，布局像素，不含缩放。还没量过时宽高都是 0。 */
+  readonly size: { readonly w: number; readonly h: number };
 }
 
 const NONE: Record<string, string> = {};
+const UNMEASURED = { w: 0, h: 0 } as const;
 
 /** 一个物件排出来的大小（布局像素，不含缩放），变了才换新的对象，免得白白重新渲染。 */
 function useBoxSize<T extends HTMLElement>(): { ref: RefObject<T | null>; w: number; h: number } {
@@ -42,6 +45,6 @@ function useBoxSize<T extends HTMLElement>(): { ref: RefObject<T | null>; w: num
 
 export function usePaper<T extends HTMLElement>(kind: PaperKind, seed: number, options: PaperOptions = {}): UsedPaper<T> {
   const { ref, w, h } = useBoxSize<T>();
-  if (w <= 0 || h <= 0) return { ref, style: NONE };
-  return { ref, style: { '--sheet': paperImage(kind, w, h, seed, options.depth) } };
+  if (w <= 0 || h <= 0) return { ref, style: NONE, size: UNMEASURED };
+  return { ref, style: { '--sheet': paperImage(kind, w, h, seed, options.depth) }, size: { w, h } };
 }
